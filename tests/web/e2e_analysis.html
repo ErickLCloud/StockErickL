@@ -3,7 +3,7 @@
 <title>scan / analysis / backtest e2e</title>
 <body>
 <pre id="out">running…</pre>
-<iframe id="f" src="../../docs/index.html" style="width:1100px;height:900px"></iframe>
+<iframe id="f" style="width:1100px;height:900px"></iframe>
 <script>
 "use strict";
 /* Drives the real page in an iframe (same origin over http):
@@ -15,7 +15,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(fn, ms) { const end = Date.now() + (ms || 15000); while (Date.now() < end) { const v = fn(); if (v) return v; await sleep(100); } return null; }
 
 (async () => {
-  const f = document.getElementById("f");
+  const f = document.getElementById("f"); f.src = "../../docs/" + (new URLSearchParams(location.search).get("page") || "index.html");
   await new Promise((r) => f.addEventListener("load", r, { once: true }));
   const d = f.contentDocument, w = f.contentWindow, $ = (id) => d.getElementById(id);
   await until(() => d.querySelectorAll(".row").length > 0);
