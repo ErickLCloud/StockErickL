@@ -22,8 +22,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.analysis.indicators import compute_indicators      # noqa: E402
 from src.http import fetch_json                              # noqa: E402
+
+# NOTE: compute_indicators (and therefore pandas) is imported lazily inside
+# build_history_and_indicators. The 5-minute `quotes` job runs on a bare
+# runner with no pip install, so this module must import with the standard
+# library alone. A top-level pandas import here made every intraday run fail
+# with ModuleNotFoundError.
 
 DB = ROOT / "db" / "stock.db"
 # docs/ not web/: GitHub Pages "Deploy from a branch" only offers
@@ -80,6 +85,7 @@ def build_index(conn):
 def build_history_and_indicators(conn):
     """Per-symbol closes for the chart, plus indicator values for the table."""
     import pandas as pd
+    from src.analysis.indicators import compute_indicators
 
     HIST.mkdir(parents=True, exist_ok=True)
     px = pd.read_sql_query(
