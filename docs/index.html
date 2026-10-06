@@ -111,7 +111,9 @@
   .btn{padding:8px 14px; border-radius:8px; cursor:pointer; background:var(--accent);
     border:1px solid var(--accent); color:#fff}
   .btn.ghost{background:var(--bg); color:var(--ink); border-color:var(--line)}
-  .msg{margin-top:8px; font-size:13px; min-height:1.2em}
+  .hint{margin-top:8px; font-size:12.5px; color:var(--muted); min-height:1.2em}
+  .hint .act{margin-left:4px}
+  .msg{margin-top:4px; font-size:13px; min-height:1.2em}
   .msg.err{color:var(--up)}
   .scroll{overflow-x:auto; margin-top:14px}
   table{border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; font-size:13.5px}
@@ -422,6 +424,7 @@ function toggleWatch(code){
 
 /* ------------------------------------------------------------ holdings */
 function paintHoldings(prefill){
+  S.costDirty = false;                 /* a fresh form has no hand-typed cost */
   const today = C.taipeiToday();
   const rows = S.lots.map((l) => {
     const q = S.quotes[l.code] || {};
@@ -449,9 +452,10 @@ function paintHoldings(prefill){
       '<div><label for="f-code">代號</label><input id="f-code" required placeholder="例如 0050" value="' + esc(prefill || "") + '"></div>' +
       '<div><label for="f-date">買入日</label><input id="f-date" type="date" required value="' + today + '"></div>' +
       '<div><label for="f-shares">股數</label><input id="f-shares" type="number" min="1" step="any" required placeholder="1000"></div>' +
-      '<div><label for="f-cost">成本價</label><input id="f-cost" type="number" min="0" step="any" required placeholder="168.5"></div>' +
+      '<div><label for="f-cost">成本價（依買入日帶入）</label><input id="f-cost" type="number" min="0" step="any" required placeholder="168.5"></div>' +
       '<div><label for="f-note">備註</label><input id="f-note" maxlength="100" placeholder="選填"></div>' +
       '<div><button class="btn" type="submit">新增</button></div></form>' +
+    '<div class="hint" id="f-hint"></div>' +
     '<div class="msg" id="lotmsg"></div>' +
     (rows.length ?
       '<div class="scroll"><table id="lottable"><thead><tr><th>標的</th><th>買入日</th><th>股數</th><th>成本</th><th>現價</th><th>市值</th><th>損益</th><th>報酬%</th><th>持有天</th><th>年化%</th></tr></thead><tbody>' + body +
@@ -465,6 +469,65 @@ function paintHoldings(prefill){
       '<button class="btn ghost" id="h-clear">清除全部</button></div>' +
     '<div class="note">年化只在持有滿 30 天後顯示。現價為最新報價（盤後為最後收盤）。' +
     '損益 =（現價 − 成本）× 股數，<strong>未含手續費與證交稅</strong>。</div></div>';
+  if(prefill) autofillCost();
+}
+
+/* Fill the cost field with the close on the buy date.
+ *
+ * It is a convenience, not a fact: the real fill price differs from the close,
+ * so the field stays editable. Three rules keep it from quietly doing harm:
+ *  - a cost the user typed is never overwritten (a button offers the close instead);
+ *  - if no reference price exists, a previously auto-filled value is CLEARED,
+ *    so a stale price from another date or symbol cannot be saved by accident;
+ *  - the hint says exactly which day's price was used (a weekend uses Friday). */
+let fillSeq = 0;
+async function autofillCost(){
+  const hint = $("f-hint"), costEl = $("f-cost");
+  if(!hint || !costEl) return;
+  const code = $("f-code").value.trim().toUpperCase(), date = $("f-date").value;
+  S.lastRef = null;
+  if(!S.byCode[code] || !C.validISO(date)){
+    hint.textContent = "";
+    if(!S.costDirty) costEl.value = "";
+    return;
+  }
+  const seq = ++fillSeq;
+  if(S.hist[code] === undefined){
+    hint.textContent = "查詢買入日價格…";
+    try{ S.hist[code] = await getJSON("data/history/" + encodeURIComponent(code) + ".json"); }
+    catch(e){ S.hist[code] = null; }
+  }
+  /* The form may have changed (or been re-rendered) while we waited. */
+  if(seq !== fillSeq || !$("f-code") || $("f-code").value.trim().toUpperCase() !== code || $("f-date").value !== date) return;
+
+  const h = S.hist[code], q = S.quotes[code], today = C.taipeiToday();
+  const r = C.priceOnOrBefore(h, date);
+  let price = null, label = "";
+  if(date === today && q && q.last != null){
+    price = q.last; label = q.live ? "今日現價" : "最近收盤";
+  }else if(r){
+    price = r.price;
+    label = r.exact ? r.date + " 收盤"
+          : r.after ? r.date + " 收盤（歷史資料最新到此日）"
+          : date + " 非交易日，取 " + r.date + " 收盤";
+  }
+
+  if(price == null){
+    const g = S.ind[code] && S.ind[code].gap;
+    hint.textContent = !h ? "查無這檔的歷史價格，請自行輸入成本價。"
+      : "買入日早於可查詢的歷史範圍（" + h.d[0] + " 起）" +
+        (g ? "；此標的有價格異常跳空，" + g.date + " 之前的資料未採用" : "") + "，請自行輸入成本價。";
+    if(!S.costDirty) costEl.value = "";
+    return;
+  }
+  S.lastRef = price;
+  if(!S.costDirty){
+    costEl.value = price.toFixed(2);
+    hint.textContent = "已帶入 " + label + " " + n2(price) + "。可自行修改，實際成交價可能不同。";
+  }else{
+    hint.innerHTML = "買入日參考價：" + esc(label) + " " + n2(price) + " " +
+      '<button type="button" class="act" id="f-usref">改用此價</button>';
+  }
 }
 
 function saveLots(){ if(!store.set(KEY_LOTS, S.lots)) notifyStorage(); }
@@ -532,6 +595,7 @@ $("detail").addEventListener("click", (e) => {
   if(t.closest(".r")){ S.range = +t.closest(".r").dataset.r; paintDetail(S.sel); return; }
   if(t.closest("#d-star")){ toggleWatch(S.sel); return; }
   if(t.closest("#d-add")){ setView("holdings", S.sel); return; }
+  if(t.closest("#f-usref")){ S.costDirty = false; autofillCost(); return; }
   const del = t.closest("[data-del]");
   if(del){ S.lots = S.lots.filter((l) => l.id !== del.dataset.del); saveLots(); paintHoldings(); return; }
   if(t.closest("#h-export")){ exportLots(); return; }
@@ -543,6 +607,11 @@ $("detail").addEventListener("click", (e) => {
 $("detail").addEventListener("submit", (e) => { if(e.target.id === "lotform") addLot(e); });
 $("detail").addEventListener("change", (e) => {
   if(e.target.id === "h-file" && e.target.files[0]) importLots(e.target.files[0]);
+  if(e.target.id === "f-date" || e.target.id === "f-code") autofillCost();
+});
+$("detail").addEventListener("input", (e) => {
+  if(e.target.id === "f-cost") S.costDirty = e.target.value !== "";   /* typing takes control; emptying hands it back */
+  else if(e.target.id === "f-code") autofillCost();
 });
 $("tab-market").addEventListener("click", () => setView("market"));
 $("tab-hold").addEventListener("click", () => setView("holdings"));

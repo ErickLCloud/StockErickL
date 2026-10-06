@@ -32,7 +32,10 @@ sys.path.insert(0, str(ROOT))
 from src.http import fetch_json  # noqa: E402
 
 DEFAULT_OUT = ROOT / "docs" / "data"
-HISTORY_DAYS = 250
+# Two years, not one: the holdings form fills the cost price from the close on
+# the buy date, so any buy inside the history window can be priced. The chart
+# only ever shows up to the last 250 of these.
+HISTORY_DAYS = 500
 MIS_BATCH = 100          # 200 is rejected with rtcode=9999
 YF_BATCH = 100
 MIN_HISTORY_OK = 0.90    # refuse to publish a history build that lost >10%

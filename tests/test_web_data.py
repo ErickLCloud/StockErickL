@@ -147,7 +147,13 @@ def _frame(closes, start="2025-01-01"):
 def test_process_symbol_without_a_gap_keeps_everything():
     ind, hist, gap = bw.process_symbol(_frame([100 + (i % 5) for i in range(300)]))
     assert gap is None and ind["rows"] == 300
-    assert len(hist["p"]) == bw.HISTORY_DAYS == len(hist["d"])
+    assert len(hist["p"]) == len(hist["d"]) == min(300, bw.HISTORY_DAYS)
+
+
+def test_history_window_covers_two_years_so_older_buys_can_be_priced():
+    assert bw.HISTORY_DAYS >= 480                       # ~2 trading years
+    ind, hist, gap = bw.process_symbol(_frame([100.0] * 600))
+    assert len(hist["p"]) == bw.HISTORY_DAYS
     assert ind["ma240"] is not None
 
 

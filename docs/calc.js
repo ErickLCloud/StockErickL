@@ -22,6 +22,30 @@
     return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
   }
 
+  /* Close on `iso`, or on the nearest EARLIER trading day (weekend, holiday).
+   * h = {d: [ISO dates ascending], p: [closes]}.
+   *
+   * Returns {date, price, exact, after}, or null when the history cannot
+   * answer: empty, bad date, or `iso` earlier than the first stored day.
+   * `after` is true when `iso` is later than the last stored day; the caller
+   * decides what that means (for today, a live quote is the better price).
+   * A missing or non-positive close is skipped back to the previous good day
+   * rather than returned as a price. */
+  function priceOnOrBefore(h, iso) {
+    if (!h || !Array.isArray(h.d) || !Array.isArray(h.p) || !h.d.length || !validISO(iso)) return null;
+    const d = h.d, p = h.p;
+    if (iso < d[0]) return null;                     // ISO strings sort chronologically
+    let lo = 0, hi = d.length - 1;
+    while (lo < hi) {                                // last index with d[i] <= iso
+      const mid = (lo + hi + 1) >> 1;
+      if (d[mid] <= iso) lo = mid; else hi = mid - 1;
+    }
+    let i = lo;
+    while (i >= 0 && !(p[i] > 0)) i--;
+    if (i < 0) return null;
+    return { date: d[i], price: p[i], exact: d[i] === iso, after: iso > d[d.length - 1] };
+  }
+
   /* Today's date in Taipei, as ISO. */
   function taipeiToday(now) {
     return new Date(now || Date.now()).toLocaleDateString("sv-SE", { timeZone: "Asia/Taipei" });
@@ -129,6 +153,6 @@
     return { lots, rejected };
   }
 
-  root.Calc = { isoDays, validISO, taipeiToday, lotMetrics, totals, ageMinutes,
+  root.Calc = { isoDays, validISO, taipeiToday, priceOnOrBefore, lotMetrics, totals, ageMinutes,
                 filterItems, sortItems, parseLots };
 })(typeof window !== "undefined" ? window : globalThis);

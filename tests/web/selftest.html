@@ -97,6 +97,32 @@ t("sort pct asc, missing last", run({}, "pct_asc").join() === "00878,2330,0050,2
 t("sort volume desc, missing last", run({}, "vol").join() === "00878,0050,2330,6488,2303,233", run({}, "vol").join());
 t("sorting does not mutate the input", (() => { const e = C.filterItems(items, { quotes }); const before = codes(e).join(); C.sortItems(e, "pct", quotes); return codes(e).join() === before; })());
 
+/* ---- price on the buy date */
+const H = { d: ["2026-09-28", "2026-09-29", "2026-09-30", "2026-10-02", "2026-10-05"],
+            p: [113.0, 114.5, 115.0, 116.0, 116.45] };
+/* `h === undefined` (not `h || H`): an explicit null must reach the function. */
+const at = (iso, h) => C.priceOnOrBefore(h === undefined ? H : h, iso);
+t("exact trading day", at("2026-09-29").price === 114.5 && at("2026-09-29").exact === true);
+t("a weekend uses the previous trading day, and says so",
+  at("2026-10-04").price === 116.0 && at("2026-10-04").date === "2026-10-02" && at("2026-10-04").exact === false, JSON.stringify(at("2026-10-04")));
+t("a holiday gap (Oct 1) uses Sep 30", at("2026-10-01").date === "2026-09-30" && at("2026-10-01").price === 115.0);
+t("first stored day is allowed", at("2026-09-28").price === 113.0);
+t("earlier than the history is unknown, not guessed", at("2026-09-27") === null && at("2020-01-01") === null);
+t("later than the history returns the last day, flagged `after`",
+  at("2026-10-09").date === "2026-10-05" && at("2026-10-09").after === true && at("2026-10-05").after === false, JSON.stringify(at("2026-10-09")));
+t("empty / missing / malformed history gives null",
+  at("2026-10-01", { d: [], p: [] }) === null && at("2026-10-01", null) === null && at("2026-10-01", { d: ["2026-10-01"] }) === null);
+t("invalid date gives null", at("2026-02-30") === null && at("") === null && at(null) === null);
+t("a missing close is skipped back to the last good day",
+  at("2026-10-02", { d: ["2026-09-30", "2026-10-02"], p: [115.0, null] }).price === 115.0 &&
+  at("2026-10-02", { d: ["2026-09-30", "2026-10-02"], p: [115.0, 0] }).date === "2026-09-30");
+t("no good close at all gives null", at("2026-10-02", { d: ["2026-10-02"], p: [null] }) === null);
+t("works on a long series (binary search)", (() => {
+  const d = [], p = [];
+  for (let i = 0; i < 500; i++) { const dt = new Date(Date.UTC(2024, 9, 1 + i)); d.push(dt.toISOString().slice(0, 10)); p.push(100 + i); }
+  return C.priceOnOrBefore({ d, p }, d[321]).price === 100 + 321 && C.priceOnOrBefore({ d, p }, d[499]).price === 599;
+})());
+
 /* ---- import validation */
 const ok = C.parseLots(JSON.stringify([{ code: "0050", date: "2025-03-14", shares: 1000, cost: 168.5, note: "首批" }]));
 t("import: a valid lot passes", ok.lots.length === 1 && ok.rejected.length === 0 && ok.lots[0].note === "首批");

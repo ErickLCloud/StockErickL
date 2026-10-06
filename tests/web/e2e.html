@@ -122,6 +122,58 @@ async function load(url) {
     $("tab-hold").click();
     t("holdings tab shows the form", !!$("lotform"));
     const today = C.taipeiToday();
+
+    /* ---- the cost price follows the buy date */
+    const h50 = await fetch("../../docs/data/history/0050.json", nc).then((r) => r.json());
+    const setForm = async (code, date) => {
+      $("f-code").value = code; $("f-code").dispatchEvent(new W.Event("input", { bubbles: true }));
+      $("f-date").value = date; $("f-date").dispatchEvent(new W.Event("change", { bubbles: true }));
+      await sleep(120);
+    };
+    const k = h50.d.length - 30, day = h50.d[k];
+    await setForm("0050", day);
+    t("cost is filled with the close on the buy date", $("f-cost").value === n2(h50.p[k]), $("f-cost").value + " vs " + n2(h50.p[k]));
+    t("the hint names the day used", $("f-hint").textContent.includes(day + " 收盤"), $("f-hint").textContent);
+
+    /* a Saturday: independent scan for the last trading day before it */
+    const dt = new Date(day + "T00:00:00Z");
+    while (dt.getUTCDay() !== 6) dt.setUTCDate(dt.getUTCDate() + 1);
+    const sat = dt.toISOString().slice(0, 10);
+    let prev = -1;
+    for (let i = 0; i < h50.d.length; i++) if (h50.d[i] < sat) prev = i;
+    await setForm("0050", sat);
+    t("a weekend takes the previous trading day's close", $("f-cost").value === n2(h50.p[prev]), sat + ": " + $("f-cost").value + " vs " + n2(h50.p[prev]));
+    t("and the hint says it was not a trading day", $("f-hint").textContent.includes("非交易日") && $("f-hint").textContent.includes(h50.d[prev]), $("f-hint").textContent);
+
+    await setForm("0050", "2020-01-02");
+    t("a date before the history CLEARS the cost (no stale price survives)", $("f-cost").value === "", "value=" + $("f-cost").value);
+    t("and explains why", $("f-hint").textContent.includes("早於") && $("f-hint").textContent.includes(h50.d[0]), $("f-hint").textContent);
+
+    await setForm("ZZZZ", day);
+    t("an unknown code clears the cost and the hint", $("f-cost").value === "" && $("f-hint").textContent === "", $("f-hint").textContent);
+
+    /* a typed cost is the user's, and must survive a date change */
+    await setForm("0050", day);
+    $("f-cost").value = "123.45"; $("f-cost").dispatchEvent(new W.Event("input", { bubbles: true }));
+    await setForm("0050", h50.d[k + 5]);
+    t("a hand-typed cost is NOT overwritten", $("f-cost").value === "123.45", $("f-cost").value);
+    t("the reference close is offered instead", !!$("f-usref") && $("f-hint").textContent.includes(n2(h50.p[k + 5])), $("f-hint").textContent);
+    $("f-usref").click(); await sleep(120);
+    t("'use this price' applies it", $("f-cost").value === n2(h50.p[k + 5]), $("f-cost").value);
+
+    await setForm("0050", today);
+    t("today uses the current quote, not a stale close", $("f-cost").value === n2(Q["0050"].last), $("f-cost").value + " vs " + n2(Q["0050"].last));
+
+    const h2330 = await fetch("../../docs/data/history/2330.json", nc).then((r) => r.json());
+    await setForm("2330", h2330.d[h2330.d.length - 10]);
+    t("works for an ordinary stock too", $("f-cost").value === n2(h2330.p[h2330.p.length - 10]), $("f-cost").value);
+
+    if (h50.d.length >= 480) {
+      await setForm("0050", h50.d[5]);
+      t("a buy ~2 years back can be priced", $("f-cost").value === n2(h50.p[5]), h50.d[5] + ": " + $("f-cost").value + " vs " + n2(h50.p[5]));
+    } else skip("2-year-old buy date", "history files still hold only " + h50.d.length + " days");
+
+    $("tab-market").click(); $("tab-hold").click();      // fresh form for the tests below
     const fill = (code, date, shares, cost, note) => {
       $("f-code").value = code; $("f-date").value = date; $("f-shares").value = shares;
       $("f-cost").value = cost; $("f-note").value = note || "";
