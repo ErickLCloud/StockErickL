@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+.env
+
+# Never commit these: holdings.csv holds your actual positions
+# (代號, 買入日, 股數, 成本價) and this is a PUBLIC repo.
+input/*.csv
