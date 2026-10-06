@@ -4,76 +4,109 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>台股看板</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&family=Roboto:wght@400;500;700&display=swap">
 <style>
   :root{
-    --bg:#f6f7f9; --panel:#fff; --line:#e3e6ea; --ink:#15181d; --muted:#6b7280;
-    --up:#d92b2b;        /* 台股慣例：紅漲 */
-    --down:#0f9d58;      /* 綠跌 */
-    --flat:#6b7280; --warn:#b45309; --warnbg:#fef3c7;
-    --accent:#2563eb; --hover:#eef2ff; --shadow:0 1px 2px rgba(0,0,0,.06); --star:#e0a100;
+    --bg:#f5f5ee; --panel:#fff; --line:#e6e6d3; --ink:#002a1d; --muted:#7b8f85;
+    --up:#d6453a;        /* 台股慣例：紅漲 */
+    --down:#12915f;      /* 綠跌 */
+    --flat:#7b8f85; --warn:#a85d10; --warnbg:#fdf0df;
+    --accent:#349f87; --accent-ink:#fff; --hover:#eef6f3; --star:#e0a100;
+    --mint:#def2ef; --deep:#002a1d; --orange:#efa661; --soft:#f8f8f3;
+    --shadow:0 1px 2px rgba(0,42,29,.05),0 6px 18px -10px rgba(0,42,29,.18);
+    --font-jp:"Zen Kaku Gothic New","Noto Sans TC","Microsoft JhengHei",system-ui,-apple-system,sans-serif;
+    --font-num:"Roboto","Segoe UI","Microsoft JhengHei",system-ui,sans-serif;
   }
   @media (prefers-color-scheme:dark){
     :root:not([data-theme="light"]){
-      --bg:#0f1115; --panel:#171a20; --line:#272b33; --ink:#e8eaee; --muted:#9aa3b2;
-      --up:#ff5a5a; --down:#2ecc8f; --accent:#6f9bff; --hover:#1e2430;
-      --warn:#f5b755; --warnbg:#3a2e12; --shadow:0 1px 2px rgba(0,0,0,.4); --star:#f5c542;
+      --bg:#0d1713; --panel:#13211b; --line:#243a31; --ink:#e7f1ec; --muted:#8aa699;
+      --up:#ff7a6e; --down:#4fd6a0; --accent:#4fb89f; --hover:#1a2d25; --soft:#102019;
+      --warn:#f1b266; --warnbg:#3a2b12; --mint:#16322b; --deep:#06110d;
+      --shadow:0 1px 2px rgba(0,0,0,.4); --star:#f5c542;
     }
   }
   :root[data-theme="dark"]{
-    --bg:#0f1115; --panel:#171a20; --line:#272b33; --ink:#e8eaee; --muted:#9aa3b2;
-    --up:#ff5a5a; --down:#2ecc8f; --accent:#6f9bff; --hover:#1e2430;
-    --warn:#f5b755; --warnbg:#3a2e12; --shadow:0 1px 2px rgba(0,0,0,.4); --star:#f5c542;
+    --bg:#0d1713; --panel:#13211b; --line:#243a31; --ink:#e7f1ec; --muted:#8aa699;
+    --up:#ff7a6e; --down:#4fd6a0; --accent:#4fb89f; --hover:#1a2d25; --soft:#102019;
+    --warn:#f1b266; --warnbg:#3a2b12; --mint:#16322b; --deep:#06110d;
+    --shadow:0 1px 2px rgba(0,0,0,.4); --star:#f5c542;
   }
   *{box-sizing:border-box}
-  body{margin:0; background:var(--bg); color:var(--ink);
-    font:15px/1.5 "Segoe UI","Microsoft JhengHei",system-ui,-apple-system,sans-serif}
-  .wrap{max-width:1180px; margin:0 auto; padding:16px}
+  html{background:var(--bg)}
+  body{margin:0; color:var(--ink); font:15px/1.65 var(--font-jp); letter-spacing:.02em;
+    background:linear-gradient(180deg,var(--bg) 0,var(--bg) 55%,var(--mint) 100%) fixed}
   button{font:inherit; color:inherit}
+  .num,.big,.v,td,.px,.pct,.taiex{font-family:var(--font-num)}
 
-  header{display:flex; flex-wrap:wrap; gap:10px 18px; align-items:center;
-    background:var(--panel); border:1px solid var(--line); border-radius:10px;
-    padding:12px 16px; box-shadow:var(--shadow); margin-bottom:14px}
-  header h1{font-size:17px; margin:0; font-weight:650}
-  .taiex{display:flex; gap:10px; align-items:baseline; font-variant-numeric:tabular-nums}
-  .taiex .v{font-size:21px; font-weight:700}
-  .tabs{display:flex; gap:6px}
-  .tab{padding:5px 14px; border-radius:8px; cursor:pointer; background:var(--bg);
-    border:1px solid var(--line); color:var(--muted)}
-  .tab[aria-pressed="true"]{background:var(--accent); border-color:var(--accent); color:#fff}
-  .stamp{margin-left:auto; color:var(--muted); font-size:12.5px; text-align:right}
+  /* ---- shell: fixed sidebar + content */
+  .shell{display:grid; grid-template-columns:292px 1fr; gap:26px; max-width:1320px; margin:0 auto; padding:18px 18px 40px}
+  @media (max-width:1000px){ .shell{grid-template-columns:1fr; gap:14px} }
+  .side{position:sticky; top:14px; align-self:start; display:flex; flex-direction:column; gap:14px}
+  @media (max-width:1000px){ .side{position:static} }
+  .wrap{min-width:0}
+
+  .brand{text-align:center; padding:6px 4px 0}
+  .brand svg{width:58px; height:58px}
+  .brand h1{margin:6px 0 0; font-size:25px; font-weight:700; color:var(--accent); letter-spacing:.14em}
+  .brand .en{font-family:var(--font-num); font-size:10.5px; letter-spacing:.24em; color:var(--accent); margin-top:-2px}
+  .brand p{margin:8px 0 0; font-size:11.5px; color:var(--muted); letter-spacing:.06em}
+
+  /* icon tiles */
+  .tabs{display:grid; grid-template-columns:1fr 1fr; gap:9px}
+  .tab{display:flex; flex-direction:column; align-items:center; gap:5px; padding:13px 6px 10px; cursor:pointer;
+    background:var(--panel); border:1px solid transparent; border-radius:10px; box-shadow:var(--shadow);
+    color:var(--accent); font-size:12.5px; font-weight:500; letter-spacing:.1em; transition:transform .15s,background .15s}
+  .tab svg{width:30px; height:30px; stroke:var(--ink); fill:none; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round}
+  .tab:hover{transform:translateY(-2px)}
+  .tab[aria-pressed="true"]{background:var(--accent); color:#fff}
+  .tab[aria-pressed="true"] svg{stroke:#fff}
+  .tab:last-child{grid-column:span 1}
+  @media (max-width:1000px){ .tabs{grid-template-columns:repeat(5,1fr)} .tab{padding:10px 2px 8px; font-size:11.5px; letter-spacing:.04em} .tab svg{width:24px;height:24px} }
+
+  .mkt{background:var(--deep); color:#e7f1ec; border-radius:10px; padding:12px 14px; box-shadow:var(--shadow)}
+  .mkt .lbl{font-size:11.5px; letter-spacing:.14em; color:#9fc4b6}
+  .taiex{display:flex; flex-wrap:wrap; gap:2px 10px; align-items:baseline; font-variant-numeric:tabular-nums; margin-top:2px}
+  .taiex .v{font-size:25px; font-weight:700; letter-spacing:.01em}
+  .mkt .taiex span[style]{color:#9fc4b6 !important}
+  .mkt .up{color:#ff8f84} .mkt .down{color:#62e0a8} .mkt .flat{color:#9fc4b6}
+  .stamp{font-size:11.5px; color:var(--muted); line-height:1.6; padding:0 4px}
   .stamp.old{color:var(--warn)}
-  .dot{display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--down)}
-  .dot.stale{background:var(--warn)}
+  .dot{display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--accent)}
+  .dot.stale{background:var(--orange)}
 
-  .cols{display:grid; grid-template-columns:340px 1fr; gap:14px; align-items:start}
-  @media (max-width:860px){ .cols{grid-template-columns:1fr} }
-  .panel{background:var(--panel); border:1px solid var(--line); border-radius:10px;
-    box-shadow:var(--shadow); overflow:hidden}
-  .pad{padding:14px 16px}
+  /* ---- content */
+  .cols{display:grid; grid-template-columns:330px 1fr; gap:16px; align-items:start}
+  @media (max-width:1180px){ .cols{grid-template-columns:1fr} }
+  .panel{background:var(--panel); border-radius:10px; box-shadow:var(--shadow); overflow:hidden; position:relative}
+  .pad{padding:16px 18px; position:relative; z-index:1}
+  /* the slanted colour band from the reference hero, drawn in CSS */
+  #detail::before{content:""; position:absolute; left:0; right:0; top:0; height:104px; z-index:0;
+    background:linear-gradient(100deg,var(--mint) 0,rgba(222,242,239,0) 78%); clip-path:polygon(0 0,100% 0,100% 28%,0 100%); opacity:.9}
 
-  #q{width:100%; padding:10px 12px; font-size:15px; color:var(--ink);
-    background:var(--bg); border:1px solid var(--line); border-radius:8px}
+  #q{width:100%; padding:11px 14px; font:inherit; font-size:14.5px; color:var(--ink);
+    background:var(--soft); border:1px solid var(--line); border-radius:999px}
   #q:focus,input:focus,select:focus{outline:2px solid var(--accent); outline-offset:1px}
   .filters{display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; align-items:center}
-  .chip{font-size:12.5px; padding:4px 10px; border-radius:999px; cursor:pointer;
-    background:var(--bg); border:1px solid var(--line); color:var(--muted)}
+  .chip{font-size:12.5px; padding:4px 12px; border-radius:999px; cursor:pointer;
+    background:var(--soft); border:1px solid var(--line); color:var(--muted); letter-spacing:.06em}
   .chip[aria-pressed="true"]{background:var(--accent); border-color:var(--accent); color:#fff}
   .sep{width:1px; height:18px; background:var(--line); margin:0 2px}
-  select{font:inherit; font-size:12.5px; padding:4px 6px; color:var(--ink);
-    background:var(--bg); border:1px solid var(--line); border-radius:8px; margin-left:auto}
-  .count{color:var(--muted); font-size:12.5px; margin-top:8px}
+  select{font:inherit; font-size:12.5px; padding:4px 8px; color:var(--ink);
+    background:var(--soft); border:1px solid var(--line); border-radius:8px; margin-left:auto}
+  .count{color:var(--muted); font-size:12px; margin-top:8px}
 
-  .list{max-height:64vh; overflow:auto; border-top:1px solid var(--line)}
-  .row{display:grid; grid-template-columns:1fr auto; gap:1px 10px; padding:8px 16px;
+  .list{max-height:68vh; overflow:auto; border-top:1px solid var(--line)}
+  .row{display:grid; grid-template-columns:1fr auto; gap:1px 10px; padding:9px 18px;
     cursor:pointer; border-bottom:1px solid var(--line)}
   .row:hover{background:var(--hover)}
-  .row[aria-selected="true"]{background:var(--hover); box-shadow:inset 3px 0 0 var(--accent)}
-  .row .code{font-weight:620; font-variant-numeric:tabular-nums}
-  .row .name{color:var(--muted); font-size:12.5px}
-  .row .px{font-variant-numeric:tabular-nums; font-weight:620; text-align:right}
+  .row[aria-selected="true"]{background:var(--hover); box-shadow:inset 4px 0 0 var(--accent)}
+  .row .code{font-weight:700; font-variant-numeric:tabular-nums; font-family:var(--font-num)}
+  .row .name{color:var(--muted); font-size:12px}
+  .row .px{font-variant-numeric:tabular-nums; font-weight:700; text-align:right}
   .row .pct{font-variant-numeric:tabular-nums; font-size:12.5px; text-align:right}
-  .kind{font-size:10.5px; color:var(--muted); border:1px solid var(--line); border-radius:4px;
-    padding:0 4px; margin-left:4px; font-weight:400}
+  .kind{font-size:10px; color:var(--accent); border:1px solid var(--accent); border-radius:4px;
+    padding:0 4px; margin-left:4px; font-weight:500; letter-spacing:.06em}
   .star{cursor:pointer; color:var(--muted); user-select:none; padding-right:2px}
   .star.on{color:var(--star)}
   .more{padding:10px 16px; color:var(--muted); font-size:12.5px; text-align:center}
@@ -81,86 +114,93 @@
   .up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--flat)}
 
   .head{display:flex; flex-wrap:wrap; gap:4px 12px; align-items:baseline}
-  .head .big{font-size:30px; font-weight:700; font-variant-numeric:tabular-nums}
-  .head .sym{font-size:18px; font-weight:650}
-  .tag{font-size:11.5px; padding:2px 8px; border-radius:999px; background:var(--bg);
-    border:1px solid var(--line); color:var(--muted)}
+  .head .big{font-size:34px; font-weight:700; font-variant-numeric:tabular-nums; line-height:1.2}
+  .head .sym{font-size:19px; font-weight:700; letter-spacing:.06em}
+  .tag{font-size:11.5px; padding:2px 10px; border-radius:999px; background:var(--soft);
+    border:1px solid var(--line); color:var(--muted); letter-spacing:.06em}
   .starbtn{font-size:20px; background:none; border:none; cursor:pointer; color:var(--muted); padding:0 4px}
   .starbtn.on{color:var(--star)}
-  .act{font-size:12.5px; padding:3px 10px; border-radius:8px; cursor:pointer;
-    background:var(--bg); border:1px solid var(--line)}
-  .grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(112px,1fr)); gap:10px; margin-top:14px}
-  .cell{background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:8px 10px}
-  .cell .k{font-size:11.5px; color:var(--muted)}
-  .cell .v{font-size:15px; font-weight:620; font-variant-numeric:tabular-nums; margin-top:1px}
-  .sub{margin:14px 0 -4px; font-size:12.5px; color:var(--muted)}
-  .alert{margin-top:12px; padding:9px 12px; border-radius:8px; font-size:13px;
-    color:var(--warn); background:var(--warnbg); border:1px solid var(--warn)}
+  .act{font-size:12.5px; padding:3px 12px; border-radius:999px; cursor:pointer;
+    background:var(--panel); border:1px solid var(--accent); color:var(--accent); letter-spacing:.06em}
+  .act:hover{background:var(--accent); color:#fff}
+  .grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(128px,1fr)); gap:10px; margin-top:14px}
+  .cell{background:var(--soft); border:1px solid var(--line); border-radius:10px; padding:8px 12px}
+  .cell .k{font-size:11.5px; color:var(--muted); letter-spacing:.06em}
+  .cell .v{font-size:16px; font-weight:700; font-variant-numeric:tabular-nums; margin-top:1px}
+  .sub{margin:18px 0 -4px; font-size:13px; color:var(--accent); font-weight:700; letter-spacing:.08em;
+    display:flex; align-items:center; gap:8px}
+  .sub::before{content:""; width:4px; height:14px; border-radius:2px; background:var(--accent); flex:none}
+  .alert{margin-top:12px; padding:9px 12px; border-radius:10px; font-size:13px;
+    color:var(--warn); background:var(--warnbg); border:1px solid var(--orange)}
   .ranges{display:flex; gap:6px; margin:16px 0 8px}
   svg{display:block; width:100%; height:auto}
-  .empty{color:var(--muted); padding:40px 16px; text-align:center}
-  .note{color:var(--muted); font-size:12.5px; margin-top:12px; line-height:1.7}
+  .empty{color:var(--muted); padding:44px 16px; text-align:center}
+  .note{color:var(--muted); font-size:12px; margin-top:12px; line-height:1.8}
   kbd{font:inherit; font-size:11.5px; padding:1px 5px; border:1px solid var(--line);
-    border-bottom-width:2px; border-radius:4px; background:var(--bg)}
+    border-bottom-width:2px; border-radius:4px; background:var(--soft)}
 
   /* holdings */
   form.add{display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:10px; align-items:end; margin-top:14px}
   form.add label{font-size:12px; color:var(--muted); display:block}
   form.add input{width:100%; padding:8px 10px; font:inherit; color:var(--ink);
-    background:var(--bg); border:1px solid var(--line); border-radius:8px}
-  .btn{padding:8px 14px; border-radius:8px; cursor:pointer; background:var(--accent);
-    border:1px solid var(--accent); color:#fff}
-  .btn.ghost{background:var(--bg); color:var(--ink); border-color:var(--line)}
+    background:var(--soft); border:1px solid var(--line); border-radius:8px}
+  .btn{padding:8px 18px; border-radius:999px; cursor:pointer; background:var(--accent);
+    border:1px solid var(--accent); color:#fff; font-weight:500; letter-spacing:.1em}
+  .btn:hover{filter:brightness(.95)}
+  .btn.ghost{background:var(--panel); color:var(--ink); border-color:var(--line)}
   .hint{margin-top:8px; font-size:12.5px; color:var(--muted); min-height:1.2em}
   .hint .act{margin-left:4px}
   .msg{margin-top:4px; font-size:13px; min-height:1.2em}
   .msg.err{color:var(--up)}
   .scroll{overflow-x:auto; margin-top:14px}
   table{border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; font-size:13.5px}
-  th,td{padding:7px 10px; text-align:right; border-bottom:1px solid var(--line); white-space:nowrap}
+  th,td{padding:8px 10px; text-align:right; border-bottom:1px solid var(--line); white-space:nowrap}
   th:first-child,td:first-child{text-align:left}
-  th{font-size:12px; color:var(--muted); font-weight:500}
-  tfoot td{font-weight:650; border-top:2px solid var(--line)}
+  th{font-size:11.5px; color:var(--muted); font-weight:500; letter-spacing:.08em; background:var(--soft)}
+  tfoot td{font-weight:700; border-top:2px solid var(--line)}
   .del{background:none; border:none; cursor:pointer; color:var(--muted); font-size:16px}
   .tools{display:flex; gap:8px; flex-wrap:wrap; margin-top:14px}
 
   /* scan / analysis / backtest */
   .bar{display:flex; flex-wrap:wrap; gap:8px; align-items:end; margin-top:12px}
   .bar label{font-size:12px; color:var(--muted); display:block}
-  .bar input,.bar select{padding:7px 9px; font:inherit; font-size:14px; margin:0; color:var(--ink);
-    background:var(--bg); border:1px solid var(--line); border-radius:8px}
+  .bar input,.bar select{padding:7px 10px; font:inherit; font-size:14px; margin:0; color:var(--ink);
+    background:var(--soft); border:1px solid var(--line); border-radius:8px}
   .bar input[type=number]{width:84px}
-  .card{border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-top:12px; background:var(--bg)}
-  .card .cell{background:var(--panel)}
-  .card ul,.reasons{margin:8px 0 0; padding-left:18px; font-size:13px; line-height:1.65}
-  .verdict{display:inline-block; font-weight:700; padding:3px 14px; border-radius:8px; color:#fff; font-size:16px}
-  .verdict.buy{background:#d92b2b} .verdict.sell{background:#0f9d58} .verdict.hold{background:#6b7280}
+  .card{border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-top:12px; background:var(--panel);
+    box-shadow:var(--shadow); border-left:4px solid var(--accent)}
+  .card .cell{background:var(--soft)}
+  .card ul,.reasons{margin:8px 0 0; padding-left:18px; font-size:13px; line-height:1.75}
+  .verdict{display:inline-block; font-weight:700; padding:3px 18px; border-radius:999px; color:#fff; font-size:16px; letter-spacing:.2em}
+  .verdict.buy{background:#d6453a} .verdict.sell{background:#12915f} .verdict.hold{background:#7b8f85}
   .legend{display:flex; flex-wrap:wrap; gap:4px 14px; font-size:12px; color:var(--muted); margin:4px 0 2px}
   .legend i{display:inline-block; width:14px; height:3px; vertical-align:middle; margin-right:4px; border-radius:2px}
   .sc{font-weight:700} .sc.p{color:var(--up)} .sc.n{color:var(--down)}
   td.l,th.l{text-align:left; white-space:normal}
+  #detail td.l:nth-child(2){white-space:nowrap}
 </style>
 </head>
 <body>
-<div class="wrap">
-
-  <header>
-    <h1>台股看板</h1>
-    <div class="taiex" id="taiex"><span class="v">—</span></div>
+<div class="shell">
+  <aside class="side">
+    <div class="brand"><svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="29" fill="none" stroke="var(--accent)" stroke-width="2"/><path d="M14 42l11-12 8 7 15-18" fill="none" stroke="var(--accent)" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="48" cy="19" r="3.4" fill="var(--orange)"/></svg><h1>台股看板</h1><div class="en">TAIWAN MARKET BOARD</div><p>上市櫃 ｜ ETF ｜ 日週線分析 ｜ 回測</p></div>
     <nav class="tabs">
-      <button class="tab" id="tab-market" aria-pressed="true">看板</button>
-      <button class="tab" id="tab-hold" aria-pressed="false">持倉</button>
-      <button class="tab" id="tab-scan" aria-pressed="false">選股</button>
-      <button class="tab" id="tab-ta" aria-pressed="false">分析</button>
-      <button class="tab" id="tab-bt" aria-pressed="false">回測</button>
+      <button class="tab" id="tab-market" aria-pressed="false"><svg viewBox="0 0 32 32" aria-hidden="true"><rect x="5" y="17" width="4.5" height="9"/><rect x="13.7" y="11" width="4.5" height="15"/><rect x="22.5" y="5" width="4.5" height="21"/></svg><span>看板</span></button>
+      <button class="tab" id="tab-hold" aria-pressed="false"><svg viewBox="0 0 32 32" aria-hidden="true"><rect x="4" y="10" width="24" height="16" rx="3"/><path d="M11 10V7.5A2.5 2.5 0 0 1 13.5 5h5A2.5 2.5 0 0 1 21 7.5V10"/><path d="M4 17h24"/></svg><span>持倉</span></button>
+      <button class="tab" id="tab-scan" aria-pressed="false"><svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="14" cy="14" r="8"/><path d="M20 20l7 7"/><path d="M10.5 15l2.5-2.5 2 2 3-3.5"/></svg><span>選股</span></button>
+      <button class="tab" id="tab-ta" aria-pressed="false"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 26V6"/><path d="M4 26h24"/><path d="M8 20l5-6 4 3 7-9"/></svg><span>分析</span></button>
+      <button class="tab" id="tab-bt" aria-pressed="false"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 16a9 9 0 1 0 3-6.7"/><path d="M6 5v6h6"/><path d="M16 11v5.5l3.5 2"/></svg><span>回測</span></button>
     </nav>
+    <div class="mkt"><div class="taiex" id="taiex"><span class="v">—</span></div></div>
     <div class="stamp" id="stampbox">
       <div><span class="dot" id="dot"></span> <span id="stamp">載入中…</span></div>
       <div id="sub"></div>
     </div>
-  </header>
+  </aside>
 
-  <div class="cols">
+  <div class="wrap">
+
+<div class="cols">
     <div class="panel">
       <div class="pad">
         <input id="q" type="search" placeholder="代號或名稱，例如 2330、台積"
@@ -191,6 +231,7 @@
   </div>
 
   <p class="note" id="note"></p>
+  </div>
 </div>
 
 <script src="calc.js"></script>
