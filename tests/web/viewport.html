@@ -1,0 +1,20 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>viewport harness</title>
+<style>body{margin:0;background:#888} iframe{border:0;background:#fff;display:block}</style>
+<body>
+<script>
+/* Show the dashboard at an exact CSS width.
+ *   viewport.html?w=390&h=1400&url=/docs/index.html%3Fcode%3D2330
+ * A headless --window-size below ~500px does not shrink the layout viewport
+ * (the browser enforces a minimum window width), so a plain screenshot of a
+ * "mobile" window is really a crop of a wider layout. An iframe of the target
+ * width evaluates media queries against the iframe, which is what a phone does. */
+const p = new URLSearchParams(location.search);
+const f = document.createElement("iframe");
+f.style.width = (p.get("w") || 390) + "px";
+f.style.height = (p.get("h") || 1400) + "px";
+f.src = p.get("url") || "/docs/index.html";
+document.body.appendChild(f);
+</script>
+</body>

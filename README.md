@@ -1,48 +1,63 @@
-# StockErickL — 台股 ETF 看板
+# StockErickL — 台股看板
 
-可搜尋、可點選的台股 ETF 與個股看板。盤中由 GitHub Actions 每 5 分鐘更新，
-靜態網頁部署在 GitHub Pages。
+可搜尋、可點選的台股看板，涵蓋**上市櫃全部個股與 ETF（約 2,400 檔）**。
+盤中每 5 分鐘更新報價，網頁部署在 GitHub Pages。
 
 網頁：<https://ericklcloud.github.io/StockErickL/>
 
-> 第一次部署前要先手動開啟 Pages：repo → **Settings → Pages** → Source 選
-> **Deploy from a branch**，branch `main`、資料夾 **`/web`**。
+## 功能
 
-## 為什麼是「近即時」而不是即時
+- **搜尋**：輸入代號或名稱（`2330`、`台積`）。完全相符的代號排最前面。
+- **篩選與排序**：ETF／個股、上漲、下跌、自選；依代號、漲幅、跌幅、成交量。
+- **明細**：現價、漲跌、開高低、成交量；個股另有本益比、殖利率、股價淨值比；
+  MA5／20／60／240、KD、RSI14、MACD 柱、量比；1 月到 1 年的走勢圖。
+- **自選與持倉**：做在網頁上，**只存在你的瀏覽器**（localStorage）。
+  持倉會即時算市值、損益、報酬率與年化（持有滿 30 天才顯示年化），可匯出／匯入備份。
+- 紅漲綠跌（台股慣例），深色模式自動跟隨系統。
 
-TWSE 與 TPEx 的公開端點**都沒有開放 CORS**（2026-10-06 實測，四個端點皆無
-`Access-Control-Allow-Origin`）。靜態網站沒有後端，瀏覽器的每個請求都是跨來源，
-所以**頁面無法直接呼叫這些 API** —— 即使用 curl 或 Python 抓得到也一樣。
+## 第一次部署（只做一次）
 
-因此抓取改在**伺服器端**進行：GitHub Actions 定時抓資料、寫成 JSON commit 進 repo，
-網頁再讀同源的 JSON。代價是延遲：
+1. repo → **Settings → Pages → Build and deployment → Source** 選 **GitHub Actions**。
+2. repo → **Actions → site → Run workflow**，`mode` 選 **full**（約 10–15 分鐘，會建立歷史資料）。
+3. 完成後網址即上線。之後排程自動維護：盤中每 5 分鐘更新報價，每個交易日 15:37（台北）重建歷史。
 
-- 盤中每 5 分鐘更新一次（GitHub 排程為 best-effort，壅塞時常延遲 5–15 分鐘，也可能跳過）
-- 頁面會顯示它**實際顯示的那份資料的時間戳**，所以資料過期是看得見的，不會被藏起來
+> 只跑 `quotes` 而沒跑過 `full` 時，頁面仍可用，但走勢圖與指標會顯示「無歷史資料」。
 
-要真正秒級即時，需要額外架一個會補上 CORS 標頭的 proxy（例如 Cloudflare Worker），
-那就不只是 GitHub 了。
+## 為什麼是「近即時」，以及為什麼資料不放進 git
 
-## 架構
+TWSE 與 TPEx 的公開端點**都沒有開放 CORS**（2026-10-06 實測），瀏覽器無法直接呼叫。
+所以抓取改在伺服器端（GitHub Actions）進行，網頁再讀同源的 JSON。代價：
+
+- GitHub 排程是 best-effort，壅塞時常延遲 5–15 分鐘，也可能跳過。
+- 頁面標題列會顯示它**實際顯示的那份報價的時間**與「N 分鐘前」，過期是看得見的。
+
+全市場報價每次約 300 KB，若每 5 分鐘 commit 一次，一天就約 70 個 commit，每個還會觸發一次 Pages 建置。
+所以**生成資料完全不進 `main`**：workflow 直接把成品部署到 Pages；慢的歷史資料每天重建一次，
+存在一個每天覆寫成單一 commit 的孤立 `data` 分支（不累積歷史）。
+
+要真正秒級即時，需要額外一個會補上 CORS 標頭的 proxy（例如 Cloudflare Worker），那就不只是 GitHub 了。
+
+## 資料來源（全部免註冊、免金鑰）
+
+| 用途 | 來源 |
+|---|---|
+| 上市／上櫃名單與收盤 | TWSE `STOCK_DAY_ALL`、TPEx `tpex_mainboard_quotes` |
+| 盤中報價 | TWSE MIS（單次最多 100 檔，全市場 24 個請求） |
+| 本益比／殖利率／淨值比 | TWSE `BWIBBU_ALL`（上市）、TPEx `peratio_analysis`（上櫃） |
+| 加權指數 | TWSE `MI_INDEX` |
+| 2 年歷史 | yfinance（`.TW` / `.TWO`） |
+
+## 結構
 
 ```
-docs/index.html            單檔靜態頁，無任何 CDN 依賴（圖表是內嵌 SVG）
-docs/data/index.json       universe 清單 + 每檔最後收盤價（pc）
-docs/data/quotes.json      盤中價格（唯一的「熱」檔案，每 5 分鐘重寫）
-docs/data/indicators.json  技術指標值（每日重算）
-docs/data/history/<code>.json  每檔 250 天 OHLCV，供繪圖
-docs/data/market.json      加權指數
-scripts/build_web_data.py 產生上述 JSON
-.github/workflows/intraday.yml  每 5 分鐘，不需資料庫
-.github/workflows/daily.yml     每日重建歷史與指標
+docs/index.html, docs/calc.js   頁面（單檔、無 CDN 依賴，圖表是內嵌 SVG）與純邏輯
+scripts/build_web_data.py       quotes（只用標準函式庫）/ history（pandas + yfinance）
+scripts/sync_publish.py         把可公開的部分鏡像到 publish/（預設 dry-run）
+.github/workflows/site.yml      建置並部署到 Pages
+src/  tests/  main.py           本機分析（SQLite、每日 Markdown 報告），見下
 ```
 
-`quotes.json` 刻意只放會變動的欄位 —— 名稱/板別在 `index.json`、指標在
-`indicators.json`。否則每 5 分鐘重寫一次會讓 repo 被無意義的 diff 塞爆
-（165KB → 45KB）。
-
-同理，5 分鐘的那個 job **不需要資料庫**：universe 與備援收盤價都從已 commit 的
-`index.json` 讀。這點已實測（把 `stock.db` 改名後 `quotes` 模式仍正常）。
+`docs/data/` 是建置產物，已 gitignore。
 
 ## 本機使用
 
@@ -50,45 +65,35 @@ scripts/build_web_data.py 產生上述 JSON
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 
-.\.venv\Scripts\python.exe main.py setup      # 首次：建 universe + 2 年回補
-.\.venv\Scripts\python.exe main.py report     # 產生每日 Markdown 報告
-.\.venv\Scripts\python.exe main.py query 0050 # 單一標的
-.\.venv\Scripts\python.exe scripts\build_web_data.py full   # 產生網頁資料
+.\.venv\Scripts\python.exe scripts\build_web_data.py quotes    # 約 90 秒
+.\.venv\Scripts\python.exe scripts\build_web_data.py history   # 約 10 分鐘
+.\.venv\Scripts\python.exe -m http.server -d docs 8000         # 開 http://127.0.0.1:8000/
+# 直接用 file:// 開會被瀏覽器擋下
 
-# 本機預覽網頁（直接用 file:// 開會被瀏覽器擋）
-.\.venv\Scripts\python.exe -m http.server -d docs 8000
+.\.venv\Scripts\python.exe main.py report      # 每日 Markdown 報告（用本機 SQLite）
+.\.venv\Scripts\python.exe main.py query 0050  # 單一標的
+
+.\.venv\Scripts\python.exe -m pytest tests/ -q
 ```
 
-## 資料來源
-
-| 用途 | 來源 | 需要金鑰 |
-|---|---|---|
-| 上市日線 | TWSE OpenAPI `STOCK_DAY_ALL` | 否 |
-| 上櫃日線 | TPEx OpenAPI | 否 |
-| 本益比/殖利率/PB | TWSE `BWIBBU_ALL`（**僅上市個股**） | 否 |
-| 盤中報價 | TWSE MIS（單次最多 100 檔） | 否 |
-| 加權指數 | TWSE `MI_INDEX` | 否 |
-| 歷史回補 | yfinance（`.TW` / `.TWO`） | 否 |
-
-全部免註冊、免 API token。
+網頁邏輯另有瀏覽器內的測試：`tests/web/selftest.html`（計算與搜尋）與
+`tests/web/e2e.html`（對真實頁面與真實資料操作搜尋、自選、持倉）。
+用任一 http 伺服器提供專案根目錄，再以 headless Edge／Chrome 開啟並 `--dump-dom`，
+看輸出裡的 `RESULT: PASS`。注意每次要用全新的瀏覽器設定檔，否則舊的 HTTP 快取會讓測試驗到過期資料。
 
 ## 已知限制
 
-- **ETF 沒有基本面資料。** `BWIBBU_ALL` 對 357 檔 ETF 覆蓋率為 **0%**（個股 94.9%）。
-  TWSE 全部 143 個端點中沒有 ETF 淨值/折溢價端點，PE/PB 本質上也是個股概念。
-  頁面一律顯示 `—`，不是 bug。
-- **357 檔中只有 303 檔算得出 MA240**（年線）。其餘是新上市 ETF，歷史不足；
-  指標逐項降級為 `—`，不會整檔失效。
-- **至少 5 檔有未調整的分割／反分割跳空**（`00673R` 恰好 1:4.00、`0052` ~1:6.99、
-  `00663L` ~1:7.31、`00887` 兩次 ~1:2）。跨跳空的 MA240 與報酬率會失真。
-  槓桿（L）/反向（R）ETF 最常見。**尚未修正。**
-- **278/357 檔有盤中報價**，其餘 MIS 不提供，頁面退回顯示最後收盤值並標示「收盤值」。
+- **ETF 沒有基本面。** TWSE 全部 143 個端點中沒有 ETF 淨值／折溢價；PE／PB 本質上是個股概念。顯示 `—`。
+- **「ETF」是用代號前綴 `00` 判斷的**，會一併納入債券 ETF 等；免費端點沒有商品類別欄位。
+- **價格異常跳空的標的會被截斷。** 單日收盤比超出 0.70–1.45 倍（台股漲跌幅限制 ±10%，不可能是正常交易）
+  就視為公司行動或資料錯誤。Yahoo 的 `Adj Close` 在這些點上**沒有**調整（實測比值恆為 ×1.000），
+  所以無從由資料還原分割比例；與其猜測，不如只用最後一次跳空之後的資料算指標與畫圖，並在頁面標示。
+  目前全市場約 29 檔（約 1.2%）受影響，其中部分可能是真實的劇烈行情而非分割，無法由資料判斷。
+- **指標需要歷史長度。** 約 2,300/2,400 檔算得出 MA240，新上市者逐項顯示 `—`。
+- **盤中報價約 85%（2,035/2,393）有成交**，其餘退回顯示最後收盤並標示「收盤值」。
 - 盤中報價來自 TWSE MIS，該端點並非正式文件化的 API，可能變動。
+- 損益**未含手續費與證交稅**。
 
 ## 免責
 
 僅供個人參考，不構成投資建議。
-
-## 色彩慣例
-
-紅漲綠跌（台股慣例，與美股相反）。

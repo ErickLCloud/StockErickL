@@ -1,0 +1,118 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>calc.js selftest</title>
+<body>
+<pre id="out">running…</pre>
+<script src="../../docs/calc.js"></script>
+<script>
+"use strict";
+/* Run in a headless browser:
+ *   msedge --headless=new --dump-dom http://127.0.0.1:PORT/tests/web/selftest.html
+ * and look for "RESULT: PASS". Expected numbers come from the Python side,
+ * which was hand-checked: 0050, cost 168.5, 1000 shares, 728 days held. */
+const C = window.Calc, fails = [];
+let n = 0;
+const near = (a, b, tol) => typeof a === "number" && Math.abs(a - b) <= tol;
+function t(name, ok, detail) { n++; if (!ok) fails.push(name + (detail ? "  -> " + detail : "")); }
+
+/* ---- dates */
+t("isoDays 0050 holding = 728 (matches Python)", C.isoDays("2024-10-08", "2026-10-06") === 728);
+t("isoDays across a leap day", C.isoDays("2024-02-28", "2024-03-01") === 2);
+t("validISO accepts a real date", C.validISO("2026-10-06"));
+t("validISO rejects Feb 30", !C.validISO("2026-02-30"));
+t("validISO rejects garbage", !C.validISO("10/06/2026") && !C.validISO(null) && !C.validISO(20261006));
+t("taipeiToday rolls over at UTC+8",
+  C.taipeiToday(Date.parse("2026-10-06T16:30:00Z")) === "2026-10-07",
+  C.taipeiToday(Date.parse("2026-10-06T16:30:00Z")));
+t("taipeiToday before the rollover",
+  C.taipeiToday(Date.parse("2026-10-06T15:30:00Z")) === "2026-10-06");
+
+/* ---- holdings maths: same numbers as the Python hand-check */
+const m1 = C.lotMetrics({ cost: 168.5, shares: 1000, date: "2024-10-08" }, 116.45, "2026-10-06");
+t("pnl -52050", near(m1.pnl, -52050, 0.01), m1.pnl);
+t("return % -30.8902", near(m1.retPct, -30.8902, 1e-3), m1.retPct);
+t("annualised % -16.9099 (Python: -16.909882)", near(m1.annPct, -16.9099, 1e-3), m1.annPct);
+t("days 728", m1.days === 728);
+t("market value", near(m1.value, 116450, 0.01));
+t("cost value", near(m1.costValue, 168500, 0.01));
+
+const m2 = C.lotMetrics({ cost: 113, shares: 500, date: "2026-09-28" }, 116.45, "2026-10-06");
+t("8-day lot: pnl 1725", near(m2.pnl, 1725, 0.01), m2.pnl);
+t("8-day lot: NO annualised figure (<30 days)", m2.annPct === null, m2.annPct);
+t("exactly 30 days is annualised", C.lotMetrics({ cost: 100, shares: 1, date: "2026-09-06" }, 110, "2026-10-06").annPct !== null);
+t("29 days is not", C.lotMetrics({ cost: 100, shares: 1, date: "2026-09-07" }, 110, "2026-10-06").annPct === null);
+
+const m3 = C.lotMetrics({ cost: 50, shares: 100, date: "2099-01-01" }, 144.65, "2026-10-06");
+t("future buy date: days negative, no annualised", m3.days < 0 && m3.annPct === null, JSON.stringify(m3));
+const m4 = C.lotMetrics({ cost: 10, shares: 100, date: "2025-01-01" }, null, "2026-10-06");
+t("no price: pnl/return are null, not 0", m4.pnl === null && m4.retPct === null && m4.value === null);
+t("price 0 is treated as no price", C.lotMetrics({ cost: 10, shares: 1, date: "2025-01-01" }, 0, "2026-10-06").pnl === null);
+t("bad date: days null, rest still computed",
+  (() => { const m = C.lotMetrics({ cost: 10, shares: 1, date: "2026-02-30" }, 12, "2026-10-06");
+           return m.days === null && near(m.pnl, 2, 1e-9) && m.annPct === null; })());
+t("loss that is also annualised stays negative", m1.annPct < 0);
+
+/* ---- totals */
+const tot = C.totals([m1, m2, m4]);
+t("totals skip the unpriced lot but count it", tot.unpriced === 1, JSON.stringify(tot));
+t("totals cost = priced lots only", near(tot.cost, 168500 + 56500, 0.01), tot.cost);
+t("totals pnl", near(tot.pnl, -52050 + 1725, 0.01), tot.pnl);
+t("totals return %", near(tot.retPct, (-52050 + 1725) / (168500 + 56500) * 100, 1e-6), tot.retPct);
+t("totals of nothing: return null, no NaN", C.totals([]).retPct === null);
+
+/* ---- age */
+t("ageMinutes 7.5", near(C.ageMinutes("2026-10-06T14:00:00+08:00", Date.parse("2026-10-06T14:07:30+08:00")), 7.5, 1e-6));
+t("ageMinutes tolerates garbage", C.ageMinutes("nope", Date.now()) === null);
+t("ageMinutes never negative", C.ageMinutes("2030-01-01T00:00:00+08:00", Date.now()) === 0);
+
+/* ---- search, filter, sort */
+const items = [
+  { c: "2330", n: "台積電", k: "STOCK", b: "TWSE" }, { c: "00878", n: "國泰永續高股息", k: "ETF", b: "TWSE" },
+  { c: "2303", n: "聯電", k: "STOCK", b: "TWSE" }, { c: "233", n: "測試", k: "STOCK", b: "TWSE" },
+  { c: "6488", n: "環球晶", k: "STOCK", b: "TPEX" }, { c: "0050", n: "元大台灣50", k: "ETF", b: "TWSE" },
+];
+const quotes = { "2330": { pct: 0.39, vol: 18343 }, "00878": { pct: -0.5, vol: 90000 }, "2303": { pct: 2.0 },
+                 "233": {}, "6488": { pct: 2.12, vol: 13422 }, "0050": { pct: 0.47, vol: 65962 } };
+const codes = (es) => es.map((e) => e.it.c);
+const run = (o, key) => codes(C.sortItems(C.filterItems(items, Object.assign({ quotes }, o)), key || "code", quotes));
+
+t("typing 2330 finds 2330 first", run({ term: "2330" })[0] === "2330", run({ term: "2330" }).join());
+t("exact code beats prefix beats name", run({ term: "233" }).join() === "233,2330", run({ term: "233" }).join());
+t("prefix search '23' lists code-prefix hits in code order", run({ term: "23" }).join() === "2303,233,2330", run({ term: "23" }).join());
+t("search by Chinese name", run({ term: "台積" }).join() === "2330", run({ term: "台積" }).join());
+t("name search ranks a name-prefix above a substring",
+  run({ term: "台" })[0] === "2330" || run({ term: "台" })[0] === "0050", run({ term: "台" }).join());
+t("search matches inside the name", run({ term: "高股息" }).join() === "00878");
+t("no match gives nothing", run({ term: "zzzz" }).length === 0);
+t("case-insensitive on codes", run({ term: "00679b" }).length === 0 && C.filterItems([{ c: "00679B", n: "x", k: "ETF" }], { term: "00679b" }).length === 1);
+t("type filter ETF", run({ type: "ETF" }).join() === "0050,00878", run({ type: "ETF" }).join());
+t("type filter STOCK excludes ETFs", !run({ type: "STOCK" }).some((c) => c.startsWith("00")));
+t("pick up = rising only", run({ pick: "up" }).join() === "0050,2303,2330,6488", run({ pick: "up" }).join());
+t("pick down = falling only", run({ pick: "down" }).join() === "00878");
+t("pick watch uses the watchlist", run({ pick: "watch", watch: new Set(["6488", "2330"]) }).join() === "2330,6488");
+t("empty watchlist shows nothing", run({ pick: "watch", watch: new Set() }).length === 0);
+/* pct: 6488 2.12 > 2303 2.0 > 0050 0.47 > 2330 0.39 > 00878 -0.5; 233 has none */
+t("sort pct desc, missing last", run({}, "pct").join() === "6488,2303,0050,2330,00878,233", run({}, "pct").join());
+t("sort pct asc, missing last", run({}, "pct_asc").join() === "00878,2330,0050,2303,6488,233", run({}, "pct_asc").join());
+t("sort volume desc, missing last", run({}, "vol").join() === "00878,0050,2330,6488,2303,233", run({}, "vol").join());
+t("sorting does not mutate the input", (() => { const e = C.filterItems(items, { quotes }); const before = codes(e).join(); C.sortItems(e, "pct", quotes); return codes(e).join() === before; })());
+
+/* ---- import validation */
+const ok = C.parseLots(JSON.stringify([{ code: "0050", date: "2025-03-14", shares: 1000, cost: 168.5, note: "首批" }]));
+t("import: a valid lot passes", ok.lots.length === 1 && ok.rejected.length === 0 && ok.lots[0].note === "首批");
+t("import: wrapped {lots:[...]} form", C.parseLots(JSON.stringify({ lots: [{ code: "0050", date: "2025-03-14", shares: 1, cost: 1 }] })).lots.length === 1);
+const bad = C.parseLots(JSON.stringify([
+  { code: "", date: "2025-03-14", shares: 1, cost: 1 }, { code: "0050", date: "2025-02-30", shares: 1, cost: 1 },
+  { code: "0050", date: "2025-03-14", shares: 0, cost: 1 }, { code: "0050", date: "2025-03-14", shares: 1, cost: -5 },
+  { code: "0050", date: "2025-03-14", shares: "abc", cost: 1 }, null,
+  { code: "2330", date: "2025-03-14", shares: 5, cost: 900 } ]));
+t("import: bad rows are rejected, the good one kept", bad.lots.length === 1 && bad.lots[0].code === "2330" && bad.rejected.length === 6, JSON.stringify(bad.rejected));
+t("import: not JSON does not throw", C.parseLots("{oops").lots.length === 0);
+t("import: wrong shape does not throw", C.parseLots("42").lots.length === 0 && C.parseLots("null").lots.length === 0);
+t("import: a note is truncated to 100 chars", C.parseLots(JSON.stringify([{ code: "a", date: "2025-01-01", shares: 1, cost: 1, note: "x".repeat(500) }])).lots[0].note.length === 100);
+
+const out = document.getElementById("out");
+out.textContent = (fails.length ? "RESULT: FAIL " : "RESULT: PASS ") + (n - fails.length) + "/" + n +
+  (fails.length ? "\n" + fails.map((f) => " - " + f).join("\n") : "");
+</script>
+</body>

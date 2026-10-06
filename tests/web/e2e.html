@@ -1,0 +1,207 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>dashboard e2e</title>
+<body style="margin:0">
+<pre id="out">running…</pre>
+<script src="../../docs/calc.js"></script>
+<script>
+"use strict";
+/* End-to-end check of the REAL page, in a headless browser, against the REAL
+ * data files in docs/data. Serve the project root over http, then:
+ *   msedge --headless=new --dump-dom http://127.0.0.1:PORT/tests/web/e2e.html
+ * and look for "RESULT: PASS". The page runs in a same-origin iframe, so this
+ * page can seed localStorage, drive the UI and read the DOM. */
+const C = window.Calc;
+const results = [], skipped = [];
+let frame, W, D;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function until(fn, ms = 8000) {
+  const t0 = Date.now();
+  for (;;) {
+    try { const v = fn(); if (v) return v; } catch (e) {}
+    if (Date.now() - t0 > ms) return null;
+    await sleep(40);
+  }
+}
+function t(name, ok, detail) { results.push({ name, ok: !!ok, detail }); }
+function skip(name, why) { skipped.push(name + " (" + why + ")"); }
+const $ = (id) => D.getElementById(id);
+const n2 = (v) => Number(v).toFixed(2);
+const money = (v) => Math.round(v).toLocaleString("en-US");
+function type(el, v) { el.value = v; el.dispatchEvent(new W.Event("input", { bubbles: true })); }
+const rows = () => [...D.querySelectorAll("#list .row")];
+const codes = () => rows().map((r) => r.dataset.code);
+
+async function load(url) {
+  if (frame) frame.remove();
+  frame = document.createElement("iframe");
+  frame.style.cssText = "width:1200px;height:900px;border:0";
+  document.body.appendChild(frame);
+  const loaded = new Promise((r) => (frame.onload = r));
+  frame.src = url;
+  await loaded;
+  W = frame.contentWindow; D = frame.contentDocument;
+  W.confirm = () => true;
+  return until(() => D.querySelectorAll("#list .row").length > 0, 15000);
+}
+
+(async function main() {
+  try {
+    localStorage.clear();
+    /* no-store: a cached copy of a data file made an earlier run test stale
+     * data while still reporting green. */
+    const nc = { cache: "no-store" };
+    const [quotes, fund, ind] = await Promise.all([
+      fetch("../../docs/data/quotes.json", nc).then((r) => r.json()),
+      fetch("../../docs/data/fundamental.json", nc).then((r) => r.json()),
+      fetch("../../docs/data/indicators.json", nc).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+    ]);
+    t("the data under test is the full-market build (not a stale ETF-only file)",
+      ind && Object.keys(ind.items).length > 2000, "indicators=" + (ind ? Object.keys(ind.items).length : "none"));
+    const Q = quotes.items;
+
+    /* ---- boot */
+    const booted = await load("../../docs/index.html");
+    t("page boots and lists rows", !!booted);
+    t("no script error on load", !D.documentElement.hasAttribute("data-js-error"), D.documentElement.getAttribute("data-js-error"));
+    const total = Number((($("count").textContent.match(/共 (\d+) 檔/) || [])[1]) || 0);
+    t("whole market is loaded (>2000 symbols)", total > 2000, "total=" + total);
+    t("TAIEX shown", /\d/.test($("taiex").textContent) && $("taiex").textContent.includes("加權指數"), $("taiex").textContent);
+    t("timestamp is labelled Taipei time", $("stamp").textContent.includes("台北"), $("stamp").textContent);
+    t("list is capped, not 2,400 DOM rows", rows().length <= 200, "rows=" + rows().length);
+
+    /* ---- the user's actual failure: searching 2330 */
+    type($("q"), "2330");
+    t("typing 2330 puts 2330 first", codes()[0] === "2330", codes().slice(0, 5).join());
+    rows()[0].click();
+    await until(() => $("detail").textContent.includes("台積電"));
+    t("clicking it shows the company", $("detail").textContent.includes("台積電"));
+    t("shows the same price as quotes.json", $("detail").querySelector(".big").textContent === n2(Q["2330"].last),
+      $("detail").querySelector(".big").textContent + " vs " + n2(Q["2330"].last));
+    const pe = fund.items["2330"][0];
+    t("shows its P/E from fundamental.json", $("detail").textContent.includes(n2(pe)), "pe=" + pe);
+    t("labelled as 個股 on 上市", $("detail").textContent.includes("個股") && $("detail").textContent.includes("上市"));
+
+    type($("q"), "6488");
+    rows()[0].click();
+    await until(() => $("detail").textContent.includes("上櫃"));
+    t("an OTC (上櫃) stock is searchable and tagged", $("detail").textContent.includes("上櫃") && codes()[0] === "6488");
+
+    type($("q"), "台積");
+    t("search by Chinese name", codes().includes("2330"));
+    type($("q"), "0050");
+    rows()[0].click();
+    await until(() => $("detail").textContent.includes("0050"));
+    t("ETF detail says there are no fundamentals", $("detail").textContent.includes("ETF 沒有本益比"));
+
+    /* ---- filters and sort */
+    type($("q"), "");
+    $("t-etf").click();
+    t("ETF filter leaves only ETFs", rows().length > 0 && rows().every((r) => r.querySelector(".kind").textContent === "ETF"));
+    $("t-stock").click();
+    t("stock filter leaves only stocks", rows().length > 0 && rows().every((r) => r.querySelector(".kind").textContent === "股"));
+    $("t-all").click();
+    $("p-up").click();
+    t("rising filter: every shown change is positive", rows().length > 0 && rows().every((r) => r.querySelector(".pct").classList.contains("up")));
+    $("p-up").click();
+    $("sort").value = "pct"; $("sort").dispatchEvent(new W.Event("change", { bubbles: true }));
+    const p = rows().slice(0, 6).map((r) => parseFloat(r.querySelector(".pct").textContent));
+    t("sorted by change, descending", p.every((v, i) => i === 0 || p[i - 1] >= v), p.join());
+    $("sort").value = "code"; $("sort").dispatchEvent(new W.Event("change", { bubbles: true }));
+
+    /* ---- watchlist */
+    type($("q"), "2330");
+    D.querySelector('[data-star="2330"]').click();
+    t("starring writes localStorage", JSON.parse(localStorage.getItem("stockerickl.watch.v1") || "[]").includes("2330"));
+    type($("q"), "");
+    $("p-watch").click();
+    t("watchlist filter shows only the starred symbol", codes().join() === "2330", codes().join());
+    $("p-watch").click();
+
+    /* ---- holdings */
+    $("tab-hold").click();
+    t("holdings tab shows the form", !!$("lotform"));
+    const today = C.taipeiToday();
+    const fill = (code, date, shares, cost, note) => {
+      $("f-code").value = code; $("f-date").value = date; $("f-shares").value = shares;
+      $("f-cost").value = cost; $("f-note").value = note || "";
+      $("lotform").requestSubmit();
+    };
+    fill("ZZZZ", "2025-01-01", 100, 10);
+    t("unknown code is rejected with a message", $("lotmsg").classList.contains("err") && $("lotmsg").textContent.includes("ZZZZ") && !D.querySelector("#lottable"), $("lotmsg").textContent);
+    fill("0050", "2999-01-01", 100, 10);
+    t("future buy date is rejected", $("lotmsg").classList.contains("err") && !D.querySelector("#lottable"), $("lotmsg").textContent);
+    fill("0050", "2024-10-08", 1000, 168.5, "首批");
+    const tr = await until(() => D.querySelector("#lottable tbody tr"));
+    t("a valid lot is added", !!tr);
+    const last = Q["0050"].last, pnl = (last - 168.5) * 1000;
+    const cells = [...tr.children].map((c) => c.textContent.trim());
+    t("P&L cell equals (last - cost) x shares", cells[6] === (pnl > 0 ? "+" : "") + money(pnl), cells[6] + " vs " + money(pnl));
+    t("return % cell matches the hand formula", cells[7] === (((last / 168.5 - 1) * 100) > 0 ? "+" : "") + n2((last / 168.5 - 1) * 100), cells[7]);
+    t("holding days = calendar days to today", cells[8] === String(C.isoDays("2024-10-08", today)), cells[8]);
+    t("annualised shown for a >30-day lot", cells[9] !== "—", cells[9]);
+    t("total row equals the single lot", $("t-pnl").textContent === cells[6], $("t-pnl").textContent);
+
+    fill("2330", C.taipeiToday(), 10, 2000);
+    await until(() => D.querySelectorAll("#lottable tbody tr").length === 2);
+    const tr2 = D.querySelectorAll("#lottable tbody tr")[1];
+    t("a lot bought today has NO annualised figure", tr2.children[9].textContent.trim() === "—", tr2.children[9].textContent);
+    const p2 = (Q["2330"].last - 2000) * 10;
+    t("total = sum of both lots", $("t-pnl").textContent === (pnl + p2 > 0 ? "+" : "") + money(pnl + p2), $("t-pnl").textContent + " vs " + money(pnl + p2));
+    t("two lots persisted", JSON.parse(localStorage.getItem("stockerickl.lots.v1")).length === 2);
+
+    /* persistence across a reload */
+    await load("../../docs/index.html");
+    $("tab-hold").click();
+    t("holdings survive a page reload", D.querySelectorAll("#lottable tbody tr").length === 2);
+    type($("q"), "2330");
+    t("watchlist survives a page reload", D.querySelector('[data-star="2330"]').classList.contains("on"));
+
+    D.querySelector("[data-del]").click();
+    t("delete removes a lot", D.querySelectorAll("#lottable tbody tr").length === 1 &&
+      JSON.parse(localStorage.getItem("stockerickl.lots.v1")).length === 1);
+    $("h-clear").click();
+    t("clear removes everything", !D.querySelector("#lottable") && JSON.parse(localStorage.getItem("stockerickl.lots.v1")).length === 0);
+
+    /* the "+ add to holdings" shortcut prefills the code */
+    $("tab-market").click();
+    type($("q"), "0050"); rows()[0].click();
+    await until(() => $("d-add"));
+    $("d-add").click();
+    t("'+ add to holdings' prefills the code", $("f-code") && $("f-code").value === "0050");
+
+    /* ---- indicators, chart, gap notice (only if the history build has run) */
+    if (!ind) {
+      skip("indicator / chart / gap checks", "docs/data/indicators.json not built yet");
+    } else {
+      $("tab-market").click();
+      type($("q"), "0050"); rows()[0].click();
+      const svg = await until(() => $("detail").querySelector("svg"), 8000);
+      t("price chart renders for 0050", !!svg);
+      t("MA20 shown from indicators.json", $("detail").textContent.includes(n2(ind.items["0050"].ma20)), "ma20=" + ind.items["0050"].ma20);
+      const stockCode = Object.keys(ind.items).find((c) => !c.startsWith("00") && ind.items[c].ma240 != null);
+      if (stockCode) {
+        type($("q"), stockCode); rows()[0].click();
+        await until(() => $("detail").textContent.includes(stockCode));
+        t("an ordinary stock also has indicators and a chart (" + stockCode + ")",
+          $("detail").textContent.includes(n2(ind.items[stockCode].ma20)) && !!(await until(() => $("detail").querySelector("svg"), 8000)));
+      }
+      const gapCode = Object.keys(ind.items).find((c) => ind.items[c].gap);
+      if (gapCode) {
+        type($("q"), gapCode); rows()[0].click();
+        await until(() => $("detail").textContent.includes(gapCode));
+        t("a symbol with a price gap shows the warning (" + gapCode + ")", $("detail").textContent.includes("異常跳空") && $("detail").textContent.includes(ind.items[gapCode].gap.date));
+      } else skip("gap warning", "no symbol with a gap in indicators.json");
+    }
+    t("no script error at the end", !D.documentElement.hasAttribute("data-js-error"), D.documentElement.getAttribute("data-js-error"));
+  } catch (e) {
+    t("test harness did not crash", false, String(e && e.stack || e));
+  }
+  const bad = results.filter((r) => !r.ok);
+  document.getElementById("out").textContent =
+    (bad.length ? "RESULT: FAIL " : "RESULT: PASS ") + (results.length - bad.length) + "/" + results.length +
+    (bad.length ? "\n" + bad.map((b) => " - " + b.name + (b.detail ? "  -> " + b.detail : "")).join("\n") : "") +
+    (skipped.length ? "\nSKIPPED: " + skipped.join("; ") : "");
+})();
+</script>
+</body>

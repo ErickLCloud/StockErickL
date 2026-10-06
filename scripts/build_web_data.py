@@ -1,254 +1,363 @@
-"""Generate the static JSON the web page reads.
+"""Generate the data the dashboard reads. Full market: ~2,400 listed symbols.
 
 Why static JSON: none of the TWSE/TPEx endpoints send CORS headers (verified
-2026-10-06, all four return no Access-Control-Allow-Origin), so a browser on
-github.io cannot call them. The fetching happens server-side in a GitHub
-Action, which commits JSON that the page then reads same-origin.
+2026-10-06), so a page on github.io cannot call them. Fetching happens
+server-side in a GitHub Action; the page reads same-origin files.
 
-Two modes, deliberately split so the 5-minute job commits a tiny diff:
+    python scripts/build_web_data.py quotes   [--out DIR]
+        index + fundamentals + intraday quotes + TAIEX. STANDARD LIBRARY ONLY:
+        the 5-minute job runs on a bare runner with no pip install.
 
-    quotes  intraday prices + 漲跌, merged onto the stored indicators.
-            One small file. Safe to run every 5 minutes.
-    full    rebuilds index.json, indicators and per-symbol history too.
-            Run once a day after close; it rewrites ~2MB.
+    python scripts/build_web_data.py history  [--out DIR]
+        2y of history for every symbol (yfinance), indicators and per-symbol
+        chart files. Needs pandas/yfinance. Slow (~9 min for 2,393 symbols).
+
+    python scripts/build_web_data.py all      [--out DIR]    both
+
+pandas/yfinance are imported lazily inside build_history so `quotes` never
+needs them. A top-level import once made every intraday run fail with
+ModuleNotFoundError.
 """
 
+import argparse
 import json
-import sqlite3
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.http import fetch_json                              # noqa: E402
+from src.http import fetch_json  # noqa: E402
 
-# NOTE: compute_indicators (and therefore pandas) is imported lazily inside
-# build_history_and_indicators. The 5-minute `quotes` job runs on a bare
-# runner with no pip install, so this module must import with the standard
-# library alone. A top-level pandas import here made every intraday run fail
-# with ModuleNotFoundError.
-
-DB = ROOT / "db" / "stock.db"
-# docs/ not web/: GitHub Pages "Deploy from a branch" only offers
-# "/ (root)" or "/docs" as the publishing folder — an arbitrary /web is
-# not selectable, and picking root serves README.md instead of the page.
-OUT = ROOT / "docs" / "data"
-HIST = OUT / "history"
+DEFAULT_OUT = ROOT / "docs" / "data"
 HISTORY_DAYS = 250
 MIS_BATCH = 100          # 200 is rejected with rtcode=9999
+YF_BATCH = 100
+MIN_HISTORY_OK = 0.90    # refuse to publish a history build that lost >10%
+
+TWSE_DAY = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
+TPEX_DAY = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes"
+TWSE_PE = "https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL"
+TPEX_PE = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_peratio_analysis"
+TWSE_INDEX = "https://openapi.twse.com.tw/v1/exchangeReport/MI_INDEX"
 MIS_URL = ("https://mis.twse.com.tw/stock/api/getStockInfo.jsp"
            "?json=1&delay=0&ex_ch=")
 
-
-def connect():
-    c = sqlite3.connect(str(DB), timeout=30)
-    c.execute("PRAGMA journal_mode=WAL")
-    c.execute("PRAGMA busy_timeout=30000")
-    return c
+# Taiwan has no DST, so a fixed +08:00 is exact. Using the machine's local
+# zone would label a UTC runner's clock as Taipei time.
+TAIPEI = timezone(timedelta(hours=8))
 
 
-def universe(conn):
-    return conn.execute(
-        "SELECT code, name, board, kind FROM instrument "
-        "WHERE in_universe=1 ORDER BY code").fetchall()
+# ------------------------------------------------------------------ parsing
 
-
-def _f(v):
-    try:
-        f = float(v)
-    except (TypeError, ValueError):
+def num(v, nd=2):
+    """'1,234.50' -> 1234.5 ; '', '--', '---', 'X', None -> None."""
+    if v is None:
         return None
-    return None if f != f else round(f, 2)
+    t = str(v).replace(",", "").replace("+", "").strip()
+    if t in ("", "-", "--", "---", "X", "x"):
+        return None
+    try:
+        f = float(t)
+    except ValueError:
+        return None
+    if f != f:
+        return None
+    return round(f, nd)
 
 
-# --------------------------------------------------------------- full rebuild
+def kind_of(code):
+    """Imprecise by construction: '00*' also covers bond ETFs. The free
+    endpoints expose no product-type field."""
+    return "ETF" if code.startswith("00") else "STOCK"
 
-def build_index(conn):
-    """index.json carries the universe AND each symbol's last stored close.
 
-    Including `pc` here is what lets the 5-minute job run with no database:
-    a GitHub runner has no stock.db (it is gitignored, 148k rows), so the
-    hot job reads this committed file for both the symbol list and the
-    fallback close.
+def stamp():
+    return datetime.now(TAIPEI).isoformat(timespec="seconds")
+
+
+def parse_universe(twse_rows, tpex_rows):
+    """Merge the two daily snapshots into one list, de-duplicated by code.
+
+    Each item: c code, n name, b board, k kind, pc last close, ch last change.
     """
-    close = dict(conn.execute(
-        "SELECT code, close FROM price_daily WHERE date = "
-        "(SELECT MAX(date) FROM price_daily)"))
-    rows = [{"c": c, "n": n or "", "b": b, "k": k, "pc": _f(close.get(c))}
-            for c, n, b, k in universe(conn)]
-    _write(OUT / "index.json", {"updated": _stamp(), "items": rows})
-    return len(rows)
+    out, seen = [], set()
+    for board, rows, f_code, f_name, f_close, f_chg in (
+        ("TWSE", twse_rows, "Code", "Name", "ClosingPrice", "Change"),
+        ("TPEX", tpex_rows, "SecuritiesCompanyCode", "CompanyName", "Close", "Change"),
+    ):
+        for r in rows:
+            code = (r.get(f_code) or "").strip()
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            out.append({"c": code, "n": (r.get(f_name) or "").strip(), "b": board,
+                        "k": kind_of(code), "pc": num(r.get(f_close)),
+                        "ch": num(r.get(f_chg))})
+    out.sort(key=lambda i: i["c"])
+    return out
 
 
-def build_history_and_indicators(conn):
-    """Per-symbol closes for the chart, plus indicator values for the table."""
-    import pandas as pd
-    from src.analysis.indicators import compute_indicators
-
-    HIST.mkdir(parents=True, exist_ok=True)
-    px = pd.read_sql_query(
-        "SELECT p.code, p.date, p.open, p.high, p.low, p.close, p.volume "
-        "FROM price_daily p JOIN instrument i ON i.code = p.code "
-        "WHERE i.in_universe = 1 ORDER BY p.code, p.date", conn)
-
-    indicators, written = {}, 0
-    for code, g in px.groupby("code"):
-        g = g.drop(columns="code").reset_index(drop=True)
-        try:
-            indicators[code] = {k: _f(v) for k, v in compute_indicators(g).items()}
-        except Exception as exc:                       # one bad symbol, not the batch
-            indicators[code] = {"error": type(exc).__name__}
-
-        tail = g.tail(HISTORY_DAYS)
-        _write(HIST / f"{code}.json", {
-            "c": code,
-            "d": [str(x) for x in tail["date"]],
-            "o": [_f(x) for x in tail["open"]],
-            "h": [_f(x) for x in tail["high"]],
-            "l": [_f(x) for x in tail["low"]],
-            "p": [_f(x) for x in tail["close"]],
-            "v": [None if x is None or x != x else int(x) for x in tail["volume"]],
-        })
-        written += 1
-
-    _write(OUT / "indicators.json", {"updated": _stamp(), "items": indicators})
-    return written
+def fetch_universe(fetch=None):
+    fetch = fetch or fetch_json     # resolved per call so tests can substitute it
+    return parse_universe(fetch(TWSE_DAY), fetch(TPEX_DAY))
 
 
-# ------------------------------------------------------------------- intraday
+def parse_fundamentals(twse_rows, tpex_rows):
+    """code -> [pe, dividend_yield_pct, pb]. Missing values stay None, never 0."""
+    out = {}
+    for r in twse_rows:
+        code = (r.get("Code") or "").strip()
+        if code:
+            out[code] = [num(r.get("PEratio")), num(r.get("DividendYield")),
+                         num(r.get("PBratio"))]
+    for r in tpex_rows:
+        code = (r.get("SecuritiesCompanyCode") or r.get("Code") or "").strip()
+        if code and code not in out:
+            out[code] = [num(r.get("PriceEarningRatio") or r.get("PEratio")),
+                         num(r.get("YieldRatio") or r.get("DividendYield")),
+                         num(r.get("PriceBookRatio") or r.get("PBratio"))]
+    return out
 
-def _ex_ch(code, board):
+
+# ----------------------------------------------------------------- intraday
+
+def ex_ch(code, board):
     return f"{'tse' if board == 'TWSE' else 'otc'}_{code}.tw"
 
 
-def fetch_intraday(rows, sleep=1.0):
-    """MIS snapshot for every symbol, in batches. Missing symbols are skipped,
-    never faked; a failed batch is reported and the rest still proceed."""
+def parse_mis(messages):
+    """MIS msgArray -> {code: quote}. z is the last trade ('-' before the
+    first trade), y the previous close, v the cumulative volume in lots."""
+    out = {}
+    for m in messages:
+        code = m.get("c")
+        if not code:
+            continue
+        last, prev = num(m.get("z")), num(m.get("y"))
+        chg = pct = None
+        if last is not None and prev not in (None, 0):
+            chg = round(last - prev, 2)
+            pct = round((last / prev - 1) * 100, 2)
+        out[code] = {"last": last, "prev": prev, "chg": chg, "pct": pct,
+                     "open": num(m.get("o")), "high": num(m.get("h")),
+                     "low": num(m.get("l")), "vol": num(m.get("v"), 0),
+                     "time": m.get("t") or m.get("ot")}
+    return out
+
+
+def fetch_intraday(universe, fetch=None, sleep=1.0):
+    """Every symbol, MIS_BATCH at a time. A failed batch is retried once and
+    then reported; the remaining batches still run."""
+    fetch = fetch or fetch_json
     out, failed = {}, []
-    chans = [_ex_ch(c, b) for c, _, b, _ in rows]
-    for i in range(0, len(chans), MIS_BATCH):
-        chunk = chans[i:i + MIS_BATCH]
-        try:
-            data = fetch_json(MIS_URL + "|".join(chunk))
-        except Exception as exc:
-            failed.append(f"batch@{i}: {type(exc).__name__}")
-            continue
-        if str(data.get("rtcode")) != "0000":
-            failed.append(f"batch@{i}: rtcode={data.get('rtcode')}")
-            continue
-        for m in data.get("msgArray", []):
-            code = m.get("c")
-            if not code:
-                continue
-            last, prev = _f(m.get("z")), _f(m.get("y"))
-            chg = pct = None
-            if last is not None and prev not in (None, 0):
-                chg = round(last - prev, 2)
-                pct = round((last / prev - 1) * 100, 2)
-            out[code] = {
-                "last": last, "prev": prev, "chg": chg, "pct": pct,
-                "open": _f(m.get("o")), "high": _f(m.get("h")),
-                "low": _f(m.get("l")), "vol": _f(m.get("v")),
-                "time": m.get("t") or m.get("ot"),
-            }
+    chans = [ex_ch(i["c"], i["b"]) for i in universe]
+    for n, i in enumerate(range(0, len(chans), MIS_BATCH)):
+        url = MIS_URL + "|".join(chans[i:i + MIS_BATCH])
+        data = None
+        for attempt in (1, 2):
+            try:
+                data = fetch(url)
+                if str(data.get("rtcode")) == "0000":
+                    break
+                data = None
+            except Exception:
+                data = None
+            time.sleep(3 if attempt == 1 else 0)
+        if data is None:
+            failed.append(f"batch {n}")
+        else:
+            out.update(parse_mis(data.get("msgArray", [])))
         if i + MIS_BATCH < len(chans):
-            time.sleep(sleep)                          # be polite to the source
+            time.sleep(sleep)
     return out, failed
 
 
-def build_quotes(conn=None):
-    """Intraday snapshot. Runs without a database when conn is None, reading
-    the committed index.json instead — that is how the 5-minute Action works."""
-    if conn is not None:
-        rows = universe(conn)
-        close = dict(conn.execute(
-            "SELECT code, close FROM price_daily WHERE date = "
-            "(SELECT MAX(date) FROM price_daily)"))
+def quote_item(live, base):
+    """One compact quotes.json entry. Falls back to the last official close
+    when MIS has no trade for the symbol (suspended, or not yet traded today).
+    None-valued keys are dropped to keep the file small."""
+    live = live or {}
+    last = live.get("last")
+    q = {"live": last is not None}
+    if last is not None:
+        q.update({k: live.get(k) for k in
+                  ("last", "prev", "chg", "pct", "open", "high", "low", "vol", "time")})
     else:
-        idx = json.loads((OUT / "index.json").read_text(encoding="utf-8"))
-        rows = [(i["c"], i.get("n"), i["b"], i.get("k")) for i in idx["items"]]
-        close = {i["c"]: i.get("pc") for i in idx["items"]}
-
-    live, failed = fetch_intraday(rows)
-
-    # Deliberately volatile-only: no name/board/kind (index.json) and no
-    # indicators (indicators.json). This file is rewritten every 5 minutes,
-    # so duplicating static fields here would trash the repo with churn.
-    items = {}
-    for code, _name, _board, _kind in rows:
-        q = live.get(code) or {}
-        items[code] = {
-            # Fall back to the stored close when intraday is unavailable
-            # (outside market hours, or a symbol MIS does not serve).
-            "last": q.get("last") if q.get("last") is not None else _f(close.get(code)),
-            "live": q.get("last") is not None,
-            "chg": q.get("chg"), "pct": q.get("pct"),
-            "open": q.get("open"), "high": q.get("high"), "low": q.get("low"),
-            "vol": q.get("vol"), "time": q.get("time"),
-        }
-    _write(OUT / "quotes.json", {
-        "updated": _stamp(),
-        "live_count": sum(1 for v in items.values() if v["live"]),
-        "failed_batches": failed,
-        "items": items,
-    })
-    return len(items), len(failed)
+        pc, ch = base.get("pc"), base.get("ch")
+        q["last"] = pc
+        q["chg"] = ch
+        if pc is not None and ch is not None and pc - ch > 0:
+            q["pct"] = round(ch / (pc - ch) * 100, 2)
+    return {k: v for k, v in q.items() if v is not None and v is not False or k == "live"}
 
 
-def build_market():
-    """大盤. Exact name match: the payload also carries 發行量加權股價報酬指數."""
+def build_market(fetch=None):
+    """TAIEX. The exact-name match (the payload also carries the total-return
+    index at ~2.3x the level) lives in src.market and is tested there; reuse it
+    rather than keeping a second copy."""
+    from src.market import parse_market_summary
+    fetch = fetch or fetch_json
     try:
-        rows = fetch_json(
-            "https://openapi.twse.com.tw/v1/exchangeReport/MI_INDEX")
+        m = parse_market_summary(fetch(TWSE_INDEX))
     except Exception as exc:
-        _write(OUT / "market.json", {"updated": _stamp(), "error": str(exc)[:120]})
-        return False
-    for r in rows:
-        if r.get("指數", "").strip() != "發行量加權股價指數":
-            continue
-        pts = _f(str(r.get("漲跌點數", "")).replace(",", ""))
-        pct = _f(r.get("漲跌百分比"))
-        if str(r.get("漲跌", "")).strip() == "-":
-            pts = None if pts is None else -pts
-            pct = None if pct is None else -pct
-        _write(OUT / "market.json", {
-            "updated": _stamp(), "name": "發行量加權股價指數",
-            "close": _f(str(r.get("收盤指數", "")).replace(",", "")),
-            "chg": pts, "pct": pct,
-        })
-        return True
-    _write(OUT / "market.json", {"updated": _stamp(), "error": "TAIEX row absent"})
-    return False
+        return {"updated": stamp(), "error": str(exc)[:120]}
+    if m is None:
+        return {"updated": stamp(), "error": "TAIEX row absent"}
+    return {"updated": stamp(), "name": m["name"], "close": m["close"],
+            "chg": m["change"], "pct": m["change_pct"]}
 
 
-# ---------------------------------------------------------------------- utils
-
-def _stamp():
-    return time.strftime("%Y-%m-%dT%H:%M:%S%z")
-
-
-def _write(path, obj):
+def write_json(path, obj):
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(obj, ensure_ascii=False, separators=(",", ":")),
                     encoding="utf-8")
 
 
+def build_quotes(out):
+    out = Path(out)
+    uni = fetch_universe()
+    try:
+        fund = parse_fundamentals(fetch_json(TWSE_PE), _try(TPEX_PE))
+    except Exception:
+        fund = {}
+    live, failed = fetch_intraday(uni)
+    items = {i["c"]: quote_item(live.get(i["c"]), i) for i in uni}
+
+    write_json(out / "index.json", {"updated": stamp(),
+                                    "items": [{k: i[k] for k in ("c", "n", "b", "k")}
+                                              for i in uni]})
+    write_json(out / "fundamental.json", {"updated": stamp(), "items": fund})
+    write_json(out / "quotes.json", {
+        "updated": stamp(),
+        "live_count": sum(1 for q in items.values() if q.get("live")),
+        "failed_batches": failed, "items": items})
+    market = build_market()
+    write_json(out / "market.json", market)
+    return {"symbols": len(uni), "live": sum(1 for q in items.values() if q.get("live")),
+            "failed_batches": len(failed), "fundamentals": len(fund),
+            "market_ok": "error" not in market}
+
+
+def _try(url):
+    try:
+        return fetch_json(url)
+    except Exception:
+        return []
+
+
+# ------------------------------------------------------------------ history
+
+def yf_symbol(item):
+    return item["c"] + (".TW" if item["b"] == "TWSE" else ".TWO")
+
+
+def frame_for(close_df, open_df, high_df, low_df, vol_df, sym):
+    """One symbol's OHLCV as a DataFrame, rows with no close dropped."""
+    import pandas as pd
+    df = pd.DataFrame({"date": close_df.index.strftime("%Y-%m-%d"),
+                       "open": open_df[sym].values, "high": high_df[sym].values,
+                       "low": low_df[sym].values, "close": close_df[sym].values,
+                       "volume": vol_df[sym].values})
+    return df.dropna(subset=["close"]).reset_index(drop=True)
+
+
+# What the page actually shows. compute_indicators also returns *_prev values,
+# volume and more, plus two non-numeric fields (rows: int, date: str) that a
+# blanket float() conversion chokes on.
+WEB_NUMERIC = ("close", "ma5", "ma20", "ma60", "ma240", "k", "d", "rsi", "hist", "vol_ratio")
+
+
+def web_indicators(raw):
+    out = {}
+    for k in WEB_NUMERIC:
+        v = raw.get(k)
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            f = None
+        out[k] = None if f is None or f != f else round(f, 2)
+    out["rows"] = int(raw["rows"]) if raw.get("rows") is not None else None
+    out["date"] = str(raw["date"]) if raw.get("date") is not None else None
+    return out
+
+
+def process_symbol(df):
+    """Cut at the last price discontinuity, then compute indicators on what is
+    left. Returns (indicators, history, gap) or None when there is no data."""
+    from src.analysis.indicators import compute_indicators
+    from src.analysis.segment import last_regime
+
+    if df is None or df.empty:
+        return None
+    start, gap = last_regime(df["date"].tolist(), df["close"].tolist())
+    seg = df.iloc[start:].reset_index(drop=True)
+    ind = web_indicators(compute_indicators(seg))
+    tail = seg.tail(HISTORY_DAYS)
+    hist = {"d": tail["date"].tolist(),
+            "p": [round(float(x), 2) for x in tail["close"]]}
+    return ind, hist, gap
+
+
+def build_history(out):
+    import yfinance as yf
+
+    out = Path(out)
+    uni = fetch_universe()
+    indicators, histories, gaps, skipped = {}, {}, {}, []
+
+    for i in range(0, len(uni), YF_BATCH):
+        chunk = uni[i:i + YF_BATCH]
+        syms = [yf_symbol(c) for c in chunk]
+        try:
+            df = yf.download(syms, period="2y", interval="1d", auto_adjust=False,
+                             progress=False, threads=False)   # threads=True drops tickers silently
+            o, h, l, c, v = (df[k] for k in ("Open", "High", "Low", "Close", "Volume"))
+        except Exception as exc:
+            print(f"  batch {i // YF_BATCH}: {type(exc).__name__}: {str(exc)[:60]}")
+            skipped += [x["c"] for x in chunk]
+            continue
+        for item, sym in zip(chunk, syms):
+            if sym not in c.columns:
+                skipped.append(item["c"])
+                continue
+            res = process_symbol(frame_for(c, o, h, l, v, sym))
+            if res is None:
+                skipped.append(item["c"])
+                continue
+            indicators[item["c"]], histories[item["c"]], gap = res
+            if gap:
+                gaps[item["c"]] = gap
+                indicators[item["c"]]["gap"] = gap
+        print(f"  history batch {i // YF_BATCH + 1}/{-(-len(uni) // YF_BATCH)}: "
+              f"ok={len(histories)} skipped={len(skipped)}", flush=True)
+
+    ok_ratio = len(histories) / len(uni) if uni else 0
+    if ok_ratio < MIN_HISTORY_OK:
+        # Do not overwrite last good data with a partial build.
+        raise SystemExit(f"history build kept only {len(histories)}/{len(uni)} symbols "
+                         f"({ok_ratio:.0%} < {MIN_HISTORY_OK:.0%}); refusing to publish")
+
+    for code, h in histories.items():
+        write_json(out / "history" / f"{code}.json", {"c": code, **h})
+    write_json(out / "indicators.json", {"updated": stamp(), "items": indicators})
+    write_json(out / "meta.json", {"history_updated": stamp(), "symbols": len(histories),
+                                   "skipped": skipped, "gap_symbols": len(gaps)})
+    return {"symbols": len(histories), "skipped": len(skipped), "gaps": len(gaps)}
+
+
 def main(argv=None):
-    mode = (argv or sys.argv[1:] or ["full"])[0]
-    if mode == "full":
-        conn = connect()
-        print(f"index.json      : {build_index(conn)} instruments")
-        print(f"history + ind   : {build_history_and_indicators(conn)} files")
-    elif mode == "quotes":
-        conn = None          # DB-free path: universe comes from index.json
-    else:
-        print(__doc__)
-        return 2
-    n, failed = build_quotes(conn)
-    print(f"quotes.json     : {n} symbols, {failed} failed batches")
-    print(f"market.json     : {'ok' if build_market() else 'unavailable'}")
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("mode", choices=("quotes", "history", "all"))
+    ap.add_argument("--out", default=str(DEFAULT_OUT))
+    args = ap.parse_args(argv)
+    if args.mode in ("quotes", "all"):
+        print("quotes :", build_quotes(args.out))
+    if args.mode in ("history", "all"):
+        print("history:", build_history(args.out))
     return 0
 
 

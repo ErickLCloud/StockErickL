@@ -1,0 +1,139 @@
+name: site
+
+# Builds the dashboard and deploys it to GitHub Pages directly from this
+# workflow. Generated data is NOT committed to main.
+#
+# Why: the full market is ~2,400 symbols, so quotes.json is ~300 KB and was
+# going to be rewritten every 5 minutes (~70 commits a trading day), and each
+# commit also triggered a Pages build. Deploying an artifact keeps main clean.
+#
+# Two kinds of data, two lifetimes:
+#   fast  index / quotes / fundamentals / TAIEX  rebuilt on EVERY run (~90 s,
+#         standard library only, nothing to pip install)
+#   slow  indicators + per-symbol history        rebuilt once a day (~10 min,
+#         yfinance) and parked on the orphan `data` branch, force-pushed as a
+#         single commit so it never accumulates history. Every other run
+#         downloads it from there.
+#
+# If the daily history build fails (yfinance rate limits are the likely cause
+# on a shared runner IP) the run still deploys fresh quotes together with the
+# previous history. The page shows the date of the history it has, so a stale
+# build is visible rather than silent.
+#
+# Honest caveat: GitHub's scheduled runs are best-effort. Under load they are
+# commonly 5-15 minutes late and are sometimes skipped. This is near real
+# time, not a ticker.
+
+on:
+  schedule:
+    - cron: "*/5 1-6 * * 1-5"   # quotes, 09:00-14:55 Taipei, Mon-Fri
+    - cron: "37 7 * * 1-5"      # history rebuild, 15:37 Taipei (after the close)
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "quotes = prices only (fast); full = also rebuild history (~10 min)"
+        type: choice
+        options: [quotes, full]
+        default: quotes
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    permissions:
+      contents: write           # push the `data` branch
+    env:
+      MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || (github.event.schedule == '37 7 * * 1-5' && 'full' || 'quotes') }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Assemble the site skeleton
+        run: |
+          mkdir -p _site/data
+          cp docs/index.html docs/calc.js _site/
+
+      - name: Fetch the last good history from the data branch
+        run: |
+          if git ls-remote --exit-code --heads origin data >/dev/null 2>&1; then
+            git clone --quiet --depth 1 --branch data --single-branch \
+              "https://github.com/${GITHUB_REPOSITORY}.git" _data
+            rm -rf _data/.git
+            cp -r _data/. _site/data/
+            rm -rf _site/data/.git     # belt and braces: never deploy git metadata
+            echo "restored $(ls _site/data/history 2>/dev/null | wc -l) history files"
+          else
+            echo "::notice::no data branch yet - run this workflow once with mode=full"
+          fi
+
+      - name: Install history dependencies
+        if: env.MODE == 'full'
+        run: pip install -r requirements.txt
+
+      - name: Rebuild history and indicators (daily)
+        id: history
+        if: env.MODE == 'full'
+        continue-on-error: true
+        run: |
+          python -u scripts/build_web_data.py history --out _hist
+          # Only reached when the build kept >= 90% of the symbols; it exits
+          # non-zero otherwise, so a partial build can never replace good data.
+          cp -r _hist/. _site/data/
+
+      - name: Publish the new history to the data branch
+        if: env.MODE == 'full' && steps.history.outcome == 'success'
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd _hist
+          git init -q -b data
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "history data $(date -u +%Y-%m-%d)"
+          git push -f "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" data
+
+      - name: Warn when the daily history failed
+        if: env.MODE == 'full' && steps.history.outcome != 'success'
+        run: echo "::warning::history rebuild failed; deploying fresh quotes with the PREVIOUS history"
+
+      - name: Refresh prices, index, fundamentals and TAIEX
+        run: python scripts/build_web_data.py quotes --out _site/data
+
+      - name: Sanity check before deploying
+        run: |
+          python - <<'PY'
+          import json
+          q = json.load(open("_site/data/quotes.json", encoding="utf-8"))
+          n, live = len(q["items"]), q["live_count"]
+          print(f"symbols={n} live={live} failed_batches={q['failed_batches']}")
+          assert n > 2000, f"only {n} symbols; refusing to deploy a broken index"
+          assert not q["failed_batches"] or live > 0, "every MIS batch failed"
+          PY
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

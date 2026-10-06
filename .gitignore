@@ -12,3 +12,6 @@ __pycache__/
 # Never commit these: holdings.csv holds your actual positions
 # (代號, 買入日, 股數, 成本價) and this is a PUBLIC repo.
 input/*.csv
+
+# Generated and deployed by the site workflow; never committed.
+docs/data/
