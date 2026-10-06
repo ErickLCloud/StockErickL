@@ -26,7 +26,10 @@ from src.analysis.indicators import compute_indicators      # noqa: E402
 from src.http import fetch_json                              # noqa: E402
 
 DB = ROOT / "db" / "stock.db"
-OUT = ROOT / "web" / "data"
+# docs/ not web/: GitHub Pages "Deploy from a branch" only offers
+# "/ (root)" or "/docs" as the publishing folder — an arbitrary /web is
+# not selectable, and picking root serves README.md instead of the page.
+OUT = ROOT / "docs" / "data"
 HIST = OUT / "history"
 HISTORY_DAYS = 250
 MIS_BATCH = 100          # 200 is rejected with rtcode=9999

@@ -26,12 +26,12 @@ TWSE 與 TPEx 的公開端點**都沒有開放 CORS**（2026-10-06 實測，四�
 ## 架構
 
 ```
-web/index.html            單檔靜態頁，無任何 CDN 依賴（圖表是內嵌 SVG）
-web/data/index.json       universe 清單 + 每檔最後收盤價（pc）
-web/data/quotes.json      盤中價格（唯一的「熱」檔案，每 5 分鐘重寫）
-web/data/indicators.json  技術指標值（每日重算）
-web/data/history/<code>.json  每檔 250 天 OHLCV，供繪圖
-web/data/market.json      加權指數
+docs/index.html            單檔靜態頁，無任何 CDN 依賴（圖表是內嵌 SVG）
+docs/data/index.json       universe 清單 + 每檔最後收盤價（pc）
+docs/data/quotes.json      盤中價格（唯一的「熱」檔案，每 5 分鐘重寫）
+docs/data/indicators.json  技術指標值（每日重算）
+docs/data/history/<code>.json  每檔 250 天 OHLCV，供繪圖
+docs/data/market.json      加權指數
 scripts/build_web_data.py 產生上述 JSON
 .github/workflows/intraday.yml  每 5 分鐘，不需資料庫
 .github/workflows/daily.yml     每日重建歷史與指標
@@ -56,7 +56,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe scripts\build_web_data.py full   # 產生網頁資料
 
 # 本機預覽網頁（直接用 file:// 開會被瀏覽器擋）
-.\.venv\Scripts\python.exe -m http.server -d web 8000
+.\.venv\Scripts\python.exe -m http.server -d docs 8000
 ```
 
 ## 資料來源

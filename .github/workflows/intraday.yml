@@ -1,9 +1,9 @@
 name: intraday quotes
 
-# Refreshes web/data/quotes.json + market.json during Taiwan market hours.
+# Refreshes docs/data/quotes.json + market.json during Taiwan market hours.
 #
 # This job needs NO database: build_web_data.py quotes reads the committed
-# web/data/index.json for the universe and fallback closes. That is why it can
+# docs/data/index.json for the universe and fallback closes. That is why it can
 # run on a bare runner in seconds.
 #
 # Honest caveat: GitHub's scheduled runners are best-effort and are commonly
@@ -43,7 +43,7 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add web/data/quotes.json web/data/market.json
+          git add docs/data/quotes.json docs/data/market.json
           if git diff --cached --quiet; then
             echo "no change; nothing to commit"
           else
