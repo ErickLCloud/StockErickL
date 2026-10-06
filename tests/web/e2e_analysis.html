@@ -1,0 +1,93 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>scan / analysis / backtest e2e</title>
+<body>
+<pre id="out">running…</pre>
+<iframe id="f" src="../../docs/index.html" style="width:1100px;height:900px"></iframe>
+<script>
+"use strict";
+/* Drives the real page in an iframe (same origin over http):
+ *   msedge --headless=new --virtual-time-budget=60000 --dump-dom http://127.0.0.1:8765/tests/web/e2e_analysis.html
+ * Look for "RESULT: PASS". */
+const fails = [], log = []; let n = 0;
+function t(name, ok, detail) { n++; if (!ok) fails.push(name + (detail !== undefined ? " -> " + detail : "")); }
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function until(fn, ms) { const end = Date.now() + (ms || 15000); while (Date.now() < end) { const v = fn(); if (v) return v; await sleep(100); } return null; }
+
+(async () => {
+  const f = document.getElementById("f");
+  await new Promise((r) => f.addEventListener("load", r, { once: true }));
+  const d = f.contentDocument, w = f.contentWindow, $ = (id) => d.getElementById(id);
+  await until(() => d.querySelectorAll(".row").length > 0);
+  t("page booted with a list", d.querySelectorAll(".row").length > 0);
+
+  /* scan */
+  $("tab-scan").click();
+  t("scan view shows the form", !!$("scan-run"));
+  $("scan-scope").value = "STOCK"; $("scan-run").click();
+  const cards = await until(() => d.querySelectorAll(".card").length > 0 || d.querySelector("#detail .empty") && /沒有符合/.test($("detail").textContent));
+  const nCards = d.querySelectorAll(".card").length;
+  t("scan finished", !!cards);
+  t("scan lists 1..5 cards", nCards >= 1 && nCards <= 5, nCards);
+  const first = d.querySelector(".card");
+  if (first) {
+    const txt = first.textContent;
+    for (const k of ["進場價", "停損", "出場目標", "成立原因", "基本因素", "歷史同型態"]) t("card shows " + k, txt.includes(k));
+    log.push(txt.replace(/\s+/g, " ").slice(0, 400));
+  }
+  /* an empty keyword scan must say so, not invent picks */
+  $("scan-term").value = "zzzz-no-such"; $("scan-run").click();
+  await until(() => /沒有符合/.test($("detail").textContent));
+  t("no match -> says so, no cards", d.querySelectorAll(".card").length === 0 && /沒有符合/.test($("detail").textContent));
+
+  /* analysis from a card */
+  $("scan-term").value = ""; $("scan-run").click();
+  await until(() => d.querySelectorAll(".card").length > 0);
+  const code = d.querySelector(".card .sym").textContent.match(/#\d+ (\S+)/)[1];
+  d.querySelector('.card [data-go="ta"]').click();
+  const verdict = await until(() => d.querySelector(".verdict"));
+  t("analysis view paints a verdict", !!verdict, $("detail").textContent.slice(0, 120));
+  t("analysis is for the clicked symbol", $("v-code") && $("v-code").value === code, $("v-code") && $("v-code").value + " vs " + code);
+  t("two charts (daily + weekly)", d.querySelectorAll("#detail svg").length === 2, d.querySelectorAll("#detail svg").length);
+  t("step table present", d.querySelectorAll("#detail tbody tr").length >= 6, d.querySelectorAll("#detail tbody tr").length);
+  t("verdict is one of three", ["買進", "持有", "賣出"].includes(verdict.textContent.trim()));
+  t("no NaN / undefined in analysis text", !/NaN|undefined|Infinity/.test($("detail").textContent), $("detail").textContent.match(/.{20}(NaN|undefined|Infinity).{20}/));
+  log.push(code + " -> " + verdict.textContent + " | " + $("detail").textContent.replace(/\s+/g, " ").slice(0, 250));
+
+  /* switching symbol while on this tab stays on this tab */
+  const other = d.querySelectorAll(".row")[3].dataset.code;
+  d.querySelectorAll(".row")[3].click();
+  await until(() => $("v-code") && $("v-code").value === other);
+  t("clicking the list keeps the analysis tab", $("tab-ta").getAttribute("aria-pressed") === "true" && $("v-code").value === other);
+  await until(() => d.querySelector(".verdict") || /資料不足|無歷史/.test($("detail").textContent));
+  t("other symbol renders (verdict or an honest empty state)", !!d.querySelector(".verdict") || /資料不足|無歷史/.test($("detail").textContent));
+
+  /* backtest */
+  $("tab-bt").click();
+  await until(() => $("bt-run"));
+  d.querySelectorAll(".row")[0].click();
+  await until(() => $("v-code").value === d.querySelectorAll(".row")[0].dataset.code);
+  await until(() => !/載入歷史資料/.test($("detail").textContent));
+  for (const kind of ["ma_cross", "rsi_rev", "breakout", "rsi_div"]) {
+    $("bt-kind").value = kind; $("bt-kind").dispatchEvent(new w.Event("change", { bubbles: true }));
+    $("bt-run").click();
+    await until(() => /交易次數/.test($("detail").textContent) || d.querySelector(".alert"));
+    const tx = $("detail").textContent;
+    t(kind + ": metrics shown", /交易次數/.test(tx) && /勝率/.test(tx) && /獲利因子/.test(tx) && /最大回撤/.test(tx) && /改進方向/.test(tx));
+    t(kind + ": no NaN/undefined", !/NaN|undefined/.test(tx), tx.match(/.{20}(NaN|undefined).{20}/));
+  }
+  /* bad params are rejected, not run */
+  $("bt-kind").value = "ma_cross"; $("bt-kind").dispatchEvent(new w.Event("change", { bubbles: true }));
+  $("bt-a").value = 30; $("bt-b").value = 10; $("bt-run").click();
+  await until(() => /必須大於/.test($("detail").textContent));
+  t("fast >= slow is rejected", /慢線必須大於快線/.test($("detail").textContent));
+
+  /* views left alone still work */
+  $("tab-hold").click(); t("holdings tab still works", !!$("lotform"));
+  $("tab-market").click(); t("market tab still works", /技術指標|從左邊選一檔/.test($("detail").textContent));
+  t("no uncaught JS error on the page", !d.documentElement.hasAttribute("data-js-error"), d.documentElement.getAttribute("data-js-error"));
+})().catch((e) => fails.push("threw: " + e.message + " " + (e.stack || "").slice(0, 200))).then(() => {
+  document.getElementById("out").textContent = (fails.length ? "RESULT: FAIL (" + fails.length + " of " + n + ")\n" + fails.join("\n") : "RESULT: PASS (" + n + " checks)") + "\n\n" + log.join("\n");
+});
+</script>
+</body>

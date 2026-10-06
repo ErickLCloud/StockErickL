@@ -1,0 +1,160 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>analysis.js selftest</title>
+<body>
+<pre id="out">running…</pre>
+<script src="../../docs/analysis.js"></script>
+<script>
+"use strict";
+/* Run in a headless browser over http (fetch needs it):
+ *   python -m http.server 8765   (from the project root)
+ *   msedge --headless=new --virtual-time-budget=60000 --dump-dom http://127.0.0.1:8765/tests/web/analysis_selftest.html
+ * and look for "RESULT: PASS". Hand-computed cases first, then the real data. */
+const A = window.Analysis, fails = [], log = [];
+let n = 0;
+const near = (a, b, tol) => typeof a === "number" && Math.abs(a - b) <= tol;
+function t(name, ok, detail) { n++; if (!ok) fails.push(name + (detail !== undefined ? "  -> " + detail : "")); }
+
+/* ---- series maths */
+const s3 = A.sma([1, 2, 3, 4, 5], 3);
+t("sma(3) = [null,null,2,3,4]", s3[0] === null && s3[1] === null && s3[2] === 2 && s3[3] === 3 && s3[4] === 4, JSON.stringify(s3));
+const up = Array.from({ length: 30 }, (_, i) => 10 + i);
+t("rsi of a straight rise is 100", A.rsi(up, 14)[29] === 100);
+const dn = up.slice().reverse();
+t("rsi of a straight fall is 0", near(A.rsi(dn, 14)[29], 0, 1e-9), A.rsi(dn, 14)[29]);
+t("macd hist is positive in a steady rise", A.macd(up).hist[29] > 0);
+
+/* ---- weekly grouping: Mon-Fri then next Mon-Tue; 2026-10-05 is a Monday */
+const w = A.weekly({ d: ["2026-09-28", "2026-09-29", "2026-10-02", "2026-10-05", "2026-10-06"], p: [1, 2, 3, 4, 5] });
+t("weekly: two weeks, last close of each", w.p.length === 2 && w.p[0] === 3 && w.p[1] === 5 && w.d[0] === "2026-10-02", JSON.stringify(w));
+
+/* ---- gap cut keeps only the data after the break */
+const cl = A.clean({ d: ["2026-01-01", "2026-01-02", "2026-01-03"], p: [100, 10, 11] }, { date: "2026-01-02" });
+t("clean cuts before the gap date", cl.p.length === 2 && cl.p[0] === 10);
+t("clean drops non-positive closes", A.clean({ d: ["a", "b"], p: [0, 5] }).p.length === 1);
+
+/* ---- backtest: hand-computed one-trade case (breakout N=2, M=2)
+ * p = [10,10,10,11,12,13,12,11,10,9]
+ * signal i=3 (11 > max(10,10)) -> buy at i=4 close 12.
+ * exit signal i=7 (11 < min(13,12)) -> sell at i=8 close 10.
+ * one losing trade: -1/6. buy&hold 9/10-1 = -0.1.
+ * equity: 1,1.0833(13),1,0.9167,0.8333 -> mdd = 1 - 0.8333/1.0833 = 0.23077 */
+const hb = { d: Array.from({ length: 10 }, (_, i) => "2026-01-" + String(i + 1).padStart(2, "0")), p: [10, 10, 10, 11, 12, 13, 12, 11, 10, 9] };
+const r0 = A.backtest(hb, { kind: "breakout", a: 2, b: 2, cost: false });
+t("hand case: 1 trade", r0.n === 1, r0.n);
+t("hand case: enters NEXT day's close (12), not the signal day's (11)", r0.trades[0] && r0.trades[0].in === 12, r0.trades[0] && r0.trades[0].in);
+t("hand case: exits at 10", r0.trades[0] && r0.trades[0].out === 10);
+t("hand case: return -16.667%", near(r0.trades[0].ret, -1 / 6, 1e-9), r0.trades[0].ret);
+t("hand case: win rate 0, profit factor 0", r0.winRate === 0 && r0.pf === 0);
+t("hand case: total -1/6", near(r0.total, -1 / 6, 1e-9));
+t("hand case: buy&hold -10%", near(r0.bh, -0.1, 1e-9));
+t("hand case: max drawdown 23.077%", near(r0.mdd, 0.230769, 1e-5), r0.mdd);
+const r1 = A.backtest(hb, { kind: "breakout", a: 2, b: 2, cost: true, etf: false });
+const exp = (10 * (1 - 0.001425 - 0.003)) / (12 * 1.001425) - 1;
+t("hand case with costs", near(r1.trades[0].ret, exp, 1e-9), r1.trades[0].ret + " vs " + exp);
+t("costs make it worse", r1.total < r0.total);
+t("ETF tax is lower than stock tax", A.backtest(hb, { kind: "breakout", a: 2, b: 2, cost: true, etf: true }).total > r1.total);
+
+/* ---- stop-loss: 8% stop closes the trade earlier than the signal exit would */
+const hs = { d: hb.d, p: [10, 10, 10, 11, 12, 13, 11, 11, 10, 9] };
+const rs = A.backtest(hs, { kind: "breakout", a: 2, b: 2, cost: false, stopPct: 8 });
+t("stop-loss trade ends no later than without stop", rs.trades[0].bars <= A.backtest(hs, { kind: "breakout", a: 2, b: 2, cost: false }).trades[0].bars);
+
+/* ---- open position at the end is flagged, not silently dropped */
+const ho = { d: hb.d, p: [10, 10, 10, 11, 12, 13, 14, 15, 16, 17] };
+const rO = A.backtest(ho, { kind: "breakout", a: 2, b: 2, cost: false });
+t("open trade is reported and flagged", rO.n === 1 && rO.trades[0].open === true && rO.openTrade);
+t("profit factor with no losing trade is Infinity", rO.pf === Infinity);
+
+/* ---- invariants on a noisy synthetic series */
+let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const noisy = { d: [], p: [] }; let px = 100;
+for (let i = 0; i < 400; i++) {
+  const dt = new Date(Date.UTC(2025, 0, 1) + i * 86400000).toISOString().slice(0, 10);
+  px *= 1 + (rnd() - 0.5) * 0.04; noisy.d.push(dt); noisy.p.push(px);
+}
+for (const kind of Object.keys(A.STRATS)) {
+  const sp = A.STRATS[kind], r = A.backtest(noisy, { kind, a: sp.a ? sp.a.v : 0, b: sp.b ? sp.b.v : 0, cost: true });
+  const ok = r.trades.every((x, i) => x.d1 >= x.d0 && (i === 0 || x.d0 >= r.trades[i - 1].d1));
+  t(kind + ": trades never overlap", ok);
+  t(kind + ": mdd within [0,1]", r.mdd >= 0 && r.mdd <= 1, r.mdd);
+  t(kind + ": winRate within [0,1] or null", r.winRate === null || (r.winRate >= 0 && r.winRate <= 1));
+  const compounded = r.trades.reduce((a, x) => a * (1 + x.ret), 1) - 1;
+  t(kind + ": total equals compounded trade returns", near(r.total, compounded, 1e-9), r.total + " vs " + compounded);
+  const rep = A.backtestReport(noisy, { kind, a: sp.a ? sp.a.v : 0, b: sp.b ? sp.b.v : 0, cost: true });
+  t(kind + ": report has base, variants, tips", rep.base && Array.isArray(rep.variants) && Array.isArray(rep.tips));
+}
+t("period window respected", A.backtest(noisy, { kind: "ma_cross", a: 5, b: 20, bars: 100, cost: true }).bars === 100);
+
+/* ---- analyze() on clear trends */
+const upH = { d: noisy.d.slice(0, 300), p: Array.from({ length: 300 }, (_, i) => 50 * Math.pow(1.004, i) * (1 + 0.01 * Math.sin(i / 3))) };
+const dnH = { d: upH.d, p: upH.p.slice().reverse() };
+const aU = A.analyze(upH), aD = A.analyze(dnH);
+t("uptrend: total score is positive", aU.total > 0, aU.total);
+t("downtrend: total score is negative", aD.total < 0, aD.total);
+t("downtrend is never 買進", aD.verdict !== "買進", aD.verdict);
+t("every step has tf, name, text and a score in -1..1", aU.steps.every((s) => (s.tf === "週" || s.tf === "日") && s.name && s.text && Math.abs(s.score) <= 1));
+t("levels: supports below, resistances above the last close",
+  aU.levels.supports.every((l) => l.price < aU.last) && aU.levels.resistances.every((l) => l.price > aU.last));
+t("analyze needs at least 30 bars", A.analyze({ d: noisy.d.slice(0, 10), p: noisy.p.slice(0, 10) }) === null);
+
+/* ---- real data: end to end over every file the page would use */
+async function real() {
+  const j = async (p) => (await fetch(p)).json();
+  const [idx, quotes, ind, fund] = await Promise.all([j("../../docs/data/index.json"), j("../../docs/data/quotes.json"),
+    j("../../docs/data/indicators.json"), j("../../docs/data/fundamental.json")]);
+  const items = idx.items, q = quotes.items, I = ind.items, F = fund.items;
+  const byCode = Object.fromEntries(items.map((i) => [i.c, i]));
+  const t0 = performance.now();
+  const cands = A.candidates(items, { scope: "all", term: "", ind: I, quotes: q });
+  t("real: prefilter returns candidates", cands.length > 0, cands.length);
+  t("real: prefilter is cheap (<1s)", performance.now() - t0 < 1000, Math.round(performance.now() - t0) + "ms");
+  log.push("prefilter: " + cands.length + " of " + items.length + " in " + Math.round(performance.now() - t0) + "ms");
+  const top = cands.slice(0, 30), found = [];
+  for (const { it } of top) {
+    const h = await j("../../docs/data/history/" + encodeURIComponent(it.c) + ".json");
+    const r = A.evaluate(it, h, q[it.c], I[it.c], F[it.c]);
+    if (r) found.push(r);
+  }
+  found.sort((a, b) => b.score - a.score);
+  log.push("evaluated " + top.length + ", kept " + found.length);
+  for (const r of found.slice(0, 5)) {
+    log.push("  " + r.code + " " + r.name + "  entry " + r.entry.toFixed(2) + " stop " + r.stop.toFixed(2) + " target " + r.target.toFixed(2) +
+      "  hist " + r.stats.wins + "/" + r.stats.n + "  score " + r.score.toFixed(1) + "  | " + r.fund);
+    t(r.code + ": stop < entry < target", r.stop < r.entry && r.entry < r.target);
+    t(r.code + ": risk:reward is exactly 1:2", near((r.target - r.entry) / (r.entry - r.stop), 2, 1e-9));
+    t(r.code + ": risk within 3%..8%", r.risk >= 0.03 - 1e-12 && r.risk <= 0.08 + 1e-12, r.risk);
+    t(r.code + ": has reasons", r.reasons.length >= 2);
+    t(r.code + ": not a 賣出", r.verdict !== "賣出");
+    t(r.code + ": numbers are finite", [r.entry, r.stop, r.target, r.score].every(Number.isFinite));
+  }
+  /* terms and scopes */
+  const etf = A.candidates(items, { scope: "ETF", term: "", ind: I, quotes: q });
+  t("scope ETF only returns ETFs", etf.every((c) => c.it.k === "ETF"));
+  const stk = A.candidates(items, { scope: "STOCK", term: "", ind: I, quotes: q });
+  t("scope STOCK excludes ETFs", stk.every((c) => c.it.k !== "ETF"));
+  t("keyword narrows the scan", A.candidates(items, { scope: "all", term: "zzzz-no-such", ind: I, quotes: q }).length === 0);
+
+  /* analysis + backtest on a few real symbols; no exceptions, no NaN */
+  for (const code of ["0050", "2330", "2317"]) {
+    if (!byCode[code]) continue;
+    const h = A.clean(await j("../../docs/data/history/" + code + ".json"), (I[code] || {}).gap);
+    const an = A.analyze(h);
+    t(code + ": analyze ok", an && ["買進", "持有", "賣出"].includes(an.verdict));
+    log.push(code + " (" + h.p.length + " bars): " + an.verdict + " total " + an.total + " (週 " + an.wScore + " / 日 " + an.dScore + ") — " + an.why);
+    for (const kind of Object.keys(A.STRATS)) {
+      const sp = A.STRATS[kind];
+      const rep = A.backtestReport(h, { kind, a: sp.a ? sp.a.v : 0, b: sp.b ? sp.b.v : 0, bars: 250, cost: true, etf: byCode[code].k === "ETF" });
+      const b = rep.base;
+      t(code + "/" + kind + ": finite metrics", Number.isFinite(b.total) && Number.isFinite(b.mdd) && Number.isFinite(b.bh));
+      log.push("  " + code + " " + kind + ": n=" + b.n + " win=" + (b.winRate == null ? "-" : (b.winRate * 100).toFixed(0) + "%") +
+        " pf=" + (b.pf == null ? "-" : b.pf === Infinity ? "inf" : b.pf.toFixed(2)) + " mdd=" + (b.mdd * 100).toFixed(1) + "% ret=" + (b.total * 100).toFixed(1) + "% bh=" + (b.bh * 100).toFixed(1) + "%");
+    }
+  }
+}
+
+real().catch((e) => { fails.push("real-data run threw: " + e.message); }).then(() => {
+  document.getElementById("out").textContent = (fails.length ? "RESULT: FAIL (" + fails.length + " of " + n + ")\n" + fails.join("\n") : "RESULT: PASS (" + n + " checks)") + "\n\n" + log.join("\n");
+});
+</script>
+</body>
