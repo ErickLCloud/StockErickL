@@ -58,10 +58,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      # Copies docs/ minus data/, NOT a hard-coded file list. The list used to
+      # name index.html and calc.js only, so analysis.js never shipped and the
+      # scan / analysis / backtest tabs were dead on the live site.
       - name: Assemble the site skeleton
-        run: |
-          mkdir -p _site/data
-          cp docs/index.html docs/calc.js _site/
+        run: python scripts/assemble_site.py _site
 
       - name: Fetch the last good history from the data branch
         run: |
@@ -110,16 +111,11 @@ jobs:
       - name: Refresh prices, index, fundamentals and TAIEX
         run: python scripts/build_web_data.py quotes --out _site/data
 
-      - name: Sanity check before deploying
-        run: |
-          python - <<'PY'
-          import json
-          q = json.load(open("_site/data/quotes.json", encoding="utf-8"))
-          n, live = len(q["items"]), q["live_count"]
-          print(f"symbols={n} live={live} failed_batches={q['failed_batches']}")
-          assert n > 2000, f"only {n} symbols; refusing to deploy a broken index"
-          assert not q["failed_batches"] or live > 0, "every MIS batch failed"
-          PY
+      # Checks the ASSEMBLED site: every script/stylesheet index.html references
+      # must be present, and the market data must be complete. A failure here
+      # stops the deploy, so the previous good site stays up.
+      - name: Sanity check the assembled site before deploying
+        run: python scripts/check_site.py _site
 
       - uses: actions/upload-pages-artifact@v3
         with:
