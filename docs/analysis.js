@@ -294,13 +294,33 @@
   /* ------------------------------------------------- daily + weekly analysis */
   const f2 = (v) => Number(v).toFixed(2);
 
+  /* Score weights. Trend STRUCTURE counts double; the two MACD readings count for nothing (shown for reference).
+   *
+   * Why (a study over every listed stock, one year of closes to 2026-09, 20-day forward return, 56,000 samples,
+   * split into an early and a late half): the structure readings kept the same sign in both halves
+   * (weekly position / weekly MA order / daily MA order / trend line); the MACD readings FLIPPED between halves
+   * (daily MACD "bearish momentum" returned +0.9% early but +3.6% late; the bullish reading the reverse),
+   * and "sitting on support" earned less than being in neither zone. With these weights the 買進 group averaged
+   * about +2.2% in both halves against +1.6% for all samples. 賣出 did NOT fall: weak stocks bounced in this
+   * rising market, so 賣出 means "trend is down", not "expect a drop". One year in a bull market is too little
+   * to tune finer than this; change the weights only with a longer or different-regime sample. */
+  const SCORE_WEIGHTS = Object.freeze({ "週線位置": 2, "週均線排列": 2, "週 RSI": 1, "週 MACD": 0,
+    "日線位置": 1, "均線排列": 2, "MACD 動能": 0, "RSI": 1, "趨勢線": 2, "支撐壓力": 1 });
+  const VERDICT_AT = 7;                      // max +11 / min -12 with these weights
+
   function analyze(h) {
     const p = h.p, n = p.length, last = p[n - 1];
     if (n < 30) return null;
     const sr = series(p), ma5 = sr.ma5, ma20 = sr.ma20, ma60 = sr.ma60, r = sr.rsi, m = sr.macd;
     const lv = levels(p), tr = trend(p, 60);
     const steps = [];
-    const add = (tf, name, score, text) => steps.push({ tf, name, score, text });
+    /* `score` is the WEIGHTED contribution, so total = the sum of what the table shows. `raw` is the plain -1/0/+1 reading. */
+    const add = (tf, name, raw, text) => {
+      const weight = SCORE_WEIGHTS[name] == null ? 1 : SCORE_WEIGHTS[name];
+      if (name === "支撐壓力") raw = Math.min(0, raw);                // sitting on support earned nothing in the market study: only "too close to resistance" counts
+      steps.push({ tf, name, raw, weight, score: raw * weight || 0,
+        text: weight === 0 ? text + "（僅供參考，不計分）" : name === "支撐壓力" && raw === 0 && /貼近支撐/.test(text) ? text + "（不加分）" : text });
+    };
 
     /* weekly: the bigger picture */
     const w = weekly(h), wp = w.p, wl = wp[wp.length - 1];
@@ -362,11 +382,11 @@
     const wScore = steps.filter((s) => s.tf === "週").reduce((a, s) => a + s.score, 0);
     const dScore = steps.filter((s) => s.tf === "日").reduce((a, s) => a + s.score, 0);
     const total = wScore + dScore;
-    const verdict = total >= 4 && wScore >= 0 ? "買進" : total <= -4 ? "賣出" : "持有";
-    const why = verdict === "買進" ? "週線與日線同向偏多（合計 " + total + " 分，需 ≥4 且週線不為負）" :
-      verdict === "賣出" ? "多數指標偏空（合計 " + total + " 分，≤ -4 視為賣出）" :
-      total >= 4 ? "日線偏多但週線為負（" + wScore + "），逆大方向不追，持有觀望" :
-      "訊號互有抵銷（合計 " + total + " 分，介於 -3 ~ +3），持有或觀望";
+    const verdict = total >= VERDICT_AT && wScore >= 0 ? "買進" : total <= -VERDICT_AT ? "賣出" : "持有";
+    const why = verdict === "買進" ? "週線與日線同向偏多（合計 " + total + " 分，需 ≥" + VERDICT_AT + " 且週線不為負）" :
+      verdict === "賣出" ? "多數指標偏空（合計 " + total + " 分，≤ -" + VERDICT_AT + " 視為賣出）" :
+      total >= VERDICT_AT ? "日線偏多但週線為負（" + wScore + "），逆大方向不追，持有觀望" :
+      "訊號互有抵銷（合計 " + total + " 分，介於 -" + (VERDICT_AT - 1) + " ~ +" + (VERDICT_AT - 1) + "），持有或觀望";
     return { steps, wScore, dScore, total, verdict, why, levels: lv, trend: tr, last,
       ma5, ma20, ma60, rsi: r, macd: m, weekly: w, wma5, wma10, wma20 };
   }
@@ -844,5 +864,5 @@
   root.Analysis = { sma, ema, rsi, macd, vol, clean, weekly, pivots, levels, trend, analyze, riskPct,
     RULES_DEFAULT, normRules, isDefaultRules, SETUP_CHECKS, setupWhy, series, stateAt, snapshot, infoFromCloses,
     setupAt, setupTrades, baselineTrades, setupStats, validateMarket, validationVerdict,
-    SECTOR_PERIODS, sectorGroups, periodReturn, memberReturns, sectorStats, bars, weeklyBars, clampView, zoomView, panView, lastView, barInfo, candidates, inScope, splitTerms, rejection, explain, evaluate, evaluateWhy, backtest, backtestReport, STRATS, COST_RT };
+    SCORE_WEIGHTS, VERDICT_AT, SECTOR_PERIODS, sectorGroups, periodReturn, memberReturns, sectorStats, bars, weeklyBars, clampView, zoomView, panView, lastView, barInfo, candidates, inScope, splitTerms, rejection, explain, evaluate, evaluateWhy, backtest, backtestReport, STRATS, COST_RT };
 })(typeof window !== "undefined" ? window : globalThis);

@@ -169,7 +169,32 @@ const aU = A.analyze(upH), aD = A.analyze(dnH);
 t("uptrend: total score is positive", aU.total > 0, aU.total);
 t("downtrend: total score is negative", aD.total < 0, aD.total);
 t("downtrend is never 買進", aD.verdict !== "買進", aD.verdict);
-t("every step has tf, name, text and a score in -1..1", aU.steps.every((s) => (s.tf === "週" || s.tf === "日") && s.name && s.text && Math.abs(s.score) <= 1));
+t("every step has tf, name, text, a raw reading in -1..1 and a weighted score = raw x weight", aU.steps.every((s) => (s.tf === "週" || s.tf === "日") && s.name && s.text && Math.abs(s.raw) <= 1 && s.score === s.raw * s.weight));
+t("total / wScore / dScore are the sums of the weighted scores the table shows",
+  aU.total === aU.steps.reduce((a, s) => a + s.score, 0) && aU.wScore === aU.steps.filter((s) => s.tf === "週").reduce((a, s) => a + s.score, 0) && aU.dScore === aU.steps.filter((s) => s.tf === "日").reduce((a, s) => a + s.score, 0));
+t("weights: structure x2, MACD x0 (reference only), support/resistance x1, others x1",
+  A.SCORE_WEIGHTS["週線位置"] === 2 && A.SCORE_WEIGHTS["週均線排列"] === 2 && A.SCORE_WEIGHTS["均線排列"] === 2 && A.SCORE_WEIGHTS["趨勢線"] === 2 &&
+  A.SCORE_WEIGHTS["週 MACD"] === 0 && A.SCORE_WEIGHTS["MACD 動能"] === 0 && A.SCORE_WEIGHTS["日線位置"] === 1 && A.SCORE_WEIGHTS["週 RSI"] === 1 && A.SCORE_WEIGHTS["RSI"] === 1 && A.SCORE_WEIGHTS["支撐壓力"] === 1);
+t("every listed step has a weight (a new step cannot silently default)", aU.steps.every((s) => s.name in A.SCORE_WEIGHTS));
+t("MACD steps are shown, labelled 僅供參考, and add nothing", aU.steps.filter((s) => /MACD/.test(s.name)).length === 2 && aU.steps.filter((s) => /MACD/.test(s.name)).every((s) => s.score === 0 && /僅供參考/.test(s.text)));
+t("support/resistance can only subtract", [aU, aD].every((a) => a.steps.filter((s) => s.name === "支撐壓力").every((s) => s.score <= 0)));
+t("maximum possible total is +11 and minimum -12 with these weights", (() => { const W = A.SCORE_WEIGHTS; const keys = Object.keys(W); const maxv = keys.reduce((a, k) => a + (k === "支撐壓力" ? 0 : W[k]), 0), minv = -keys.reduce((a, k) => a + W[k], 0); return maxv === 11 && minv === -12; })());
+{
+  let ok = true, bad = "", seed = 4242; const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  for (let k = 0; k < 300; k++) {
+    let v = 50; const p = [], d = [];
+    const drift = (rnd() - 0.5) * 0.01, vol = 0.005 + rnd() * 0.03;
+    for (let i = 0; i < 320; i++) { v *= 1 + drift + (rnd() - 0.5) * vol * 2; p.push(Math.max(1, v)); d.push(noisy.d[i % noisy.d.length] && "2025-" + String(1 + Math.floor(i / 28) % 12).padStart(2, "0") + "-" + String(1 + i % 28).padStart(2, "0")); }
+    const dd = Array.from({ length: 320 }, (_, i) => new Date(Date.UTC(2025, 0, 1 + i)).toISOString().slice(0, 10));
+    const a = A.analyze({ d: dd, p });
+    if (!a) continue;
+    const want = a.total >= A.VERDICT_AT && a.wScore >= 0 ? "買進" : a.total <= -A.VERDICT_AT ? "賣出" : "持有";
+    if (a.verdict !== want || a.total > 11 || a.total < -12) { ok = false; bad = JSON.stringify([a.total, a.wScore, a.verdict]); break; }
+  }
+  t("300 random series: verdict follows the stated thresholds and the total stays within -12..+11", ok, bad);
+}
+t("the verdict threshold is 7", A.VERDICT_AT === 7);
+t("a steady rise is 買進 and a steady fall is 賣出 under the new weights", aU.verdict === "買進" && aD.verdict === "賣出", aU.verdict + " " + aU.total + " / " + aD.verdict + " " + aD.total);
 t("levels: supports below, resistances above the last close",
   aU.levels.supports.every((l) => l.price < aU.last) && aU.levels.resistances.every((l) => l.price > aU.last));
 t("analyze needs at least 30 bars", A.analyze({ d: noisy.d.slice(0, 10), p: noisy.p.slice(0, 10) }) === null);

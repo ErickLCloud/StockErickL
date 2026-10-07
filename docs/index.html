@@ -1134,7 +1134,7 @@ function paintTA(){
 
   const tr = an.trend;
   const vc = an.verdict === "買進" ? "buy" : an.verdict === "賣出" ? "sell" : "hold";
-  const rows = an.steps.map((s) => '<tr><td>' + s.tf + '</td><td class="l">' + esc(s.name) + '</td><td class="sc ' +
+  const rows = an.steps.map((s) => '<tr><td>' + s.tf + '</td><td class="l">' + esc(s.name) + '</td><td class="flat">×' + s.weight + '</td><td class="sc ' +
     (s.score > 0 ? "p" : s.score < 0 ? "n" : "") + '">' + (s.score > 0 ? "+" : "") + s.score + '</td><td class="l">' + esc(s.text) + '</td></tr>').join("");
   const risk = A.riskPct(c.p), ref = q.last > 0 ? q.last : c.p[n - 1];
   const plan = an.verdict === "買進" ?
@@ -1149,10 +1149,16 @@ function paintTA(){
       '<span>' + esc(an.why) + '</span></div>' + plan +
     '<div class="sub">訊號分數：週 ' + sg(an.wScore) + '、日 ' + sg(an.dScore) + '、合計 ' + sg(an.total) + '　<a href="#chartdock">↓ K 線圖與逐步訊號在下方</a></div></div>';
   const below = '<div class="pad" id="ta-below" style="padding-top:0"><div class="sub">逐步訊號（週線定方向，日線定時機）：週 ' + sg(an.wScore) + '、日 ' + sg(an.dScore) + '、合計 ' + sg(an.total) + '</div>' +
-    '<div class="scroll"><table id="steptable"><thead><tr><th>週期</th><th class="l">項目</th><th>分數</th><th class="l">說明</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+    '<div class="scroll"><table id="steptable"><thead><tr><th>週期</th><th class="l">項目</th><th>權重</th><th>分數</th><th class="l">說明</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+    '<details class="adv"><summary>評分標準與它的歷史表現</summary><div class="note" id="score-std">' +
+    '<strong>權重：</strong>趨勢結構（週線位置、週均線排列、日均線排列、日趨勢線）各 ×2；日線位置、週 RSI、日 RSI 各 ×1；支撐壓力只在「離壓力太近」時扣 1 分（貼近支撐不加分）；' +
+    '<strong>兩個 MACD 只顯示、不計分</strong>。' +
+    '<br><strong>為什麼：</strong>以全市場約一年（至 2026-09）的收盤回放、看之後 20 個交易日報酬（約 5.6 萬筆、分前後半段）：趨勢結構的項目在前後半段方向一致；MACD 兩項在前後半段方向相反（不穩定）；貼近支撐並沒有比較好。' +
+    '調整後「買進」組平均約 +2.2%（前後半段都是），全體平均 +1.6%；<strong>「賣出」組沒有下跌</strong>（約 +1.4%），因為這段期間大盤上漲、弱勢股常反彈——所以「賣出」指趨勢向下，不是預測會跌。' +
+    '<br><strong>能信多少：</strong>只有一年、多頭行情，同一天的股票彼此高度相關，有效樣本遠少於 5.6 萬；權重是用同一段資料挑的，這是在樣本內的結果。分數衡量的是趨勢強弱，不是報酬預測。</div></details>' +
     (tr.supLine ? '<div class="note">上升趨勢線（連接最近兩個低點）目前約在 ' + n2(tr.supLine.now) + '，跌破視為趨勢轉弱。</div>' : "") +
     (tr.resLine ? '<div class="note">下降趨勢線（連接最近兩個高點）目前約在 ' + n2(tr.resLine.now) + '，突破視為轉強。</div>' : "") +
-    '<div class="note">買進需合計 ≥ +4 且週線分數不為負；≤ -4 為賣出；其餘持有。本週若尚未收完，週線以最新收盤暫代。' +
+    '<div class="note">買進需合計 ≥ +' + A.VERDICT_AT + ' 且週線分數不為負；≤ -' + A.VERDICT_AT + ' 為賣出；其餘持有（滿分 +11、最低 -12）。本週若尚未收完，週線以最新收盤暫代。' +
     '支撐壓力為收盤價的轉折群聚，不含盤中高低點。</div>' + DISCLAIMER + '</div>';
   paintDock(an, below);
 }
@@ -1268,7 +1274,7 @@ function paintHome(){
   const boardChips = '<span>' + chip("data-home-board", "TWSE", "上市", h.board === "TWSE") + chip("data-home-board", "TPEX", "上櫃", h.board === "TPEX") + '</span>';
 
   const idxCard = (name, x, note) => '<div class="idxcard"><span class="flat" style="font-size:13px">' + name + '</span><span class="v ' + cls(x.chg) + '">' + n2(x.close) + '</span><span class="' + cls(x.chg) + '">' +
-    sign(x.chg) + ' (' + sign(x.pct) + '%)</span>' + (note ? '<span class="flat" style="font-size:11.5px">' + note + '</span>' : "") + '</div>';
+    sign(x.chg) + ' (' + sign(x.pct) + '%)</span>' + (note ? '<span class="flat" style="font-size:11.5px;display:block">' + note + '</span>' : "") + '</div>';
   const idx = mk && mk.close != null
     ? idxCard("加權指數", mk) + (mk.otc ? idxCard("櫃買指數", mk.otc, esc(mk.otc.date) + " 盤後") : "")
     : '<div class="empty">指數資料尚未載入。</div>';
