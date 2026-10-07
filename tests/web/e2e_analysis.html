@@ -295,6 +295,16 @@ async function until(fn, ms) { const end = Date.now() + (ms || 15000); while (Da
       const row = rows.find((r) => r.textContent.includes("晶圓代工"));
       t("a theme's 5-day figure equals the mean of its members' raw 5-day returns", row && row.textContent.includes(pctTxt(mean5)), (row && row.textContent.slice(0, 100)) + " vs " + pctTxt(mean5));
     }
+    {
+      const nOf = (name) => { const g = Sx.sec && A.sectorGroups(Sx.index, Sx.themes).find((x) => x.name === name); return g; };
+      const cardNames = [...d.querySelectorAll(".seccard .secline span")].map((x) => x.textContent);
+      const rets5 = A.memberReturns(Sx.closes, Sx.quotes, Sx.info, null, [5]);
+      const withData = (g) => g.codes.filter((c) => rets5[c] && Number.isFinite(rets5[c][5])).length;
+      const groups = A.sectorGroups(Sx.index, Sx.themes);
+      t("leaders and laggards only list groups with >= 5 members that have data", cardNames.length > 0 && cardNames.every((nm) => withData(groups.find((g) => g.name === nm)) >= 5), cardNames.join(","));
+      const small = groups.filter((g) => withData(g) < 5 && withData(g) > 0);
+      t("small groups stay in the table and are marked 樣本少", small.length === 0 || [...d.querySelectorAll("#sectable tr.secrow")].filter((r) => /樣本少/.test(r.textContent)).length === small.length, small.length);
+    }
     d.querySelector('[data-sec-period="20"]').click();
     t("choosing 20日 re-sorts by 20 days (descending)", (() => {
       const vals = [...d.querySelectorAll("#sectable tbody tr.secrow")].map((r) => parseFloat(r.children[4].textContent)).filter((x) => !isNaN(x));
