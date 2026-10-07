@@ -125,23 +125,41 @@ def test_fundamentals_twse_wins_a_duplicate_code():
 # ---------------------------------------------------------- web_indicators
 
 def test_web_indicators_handles_the_non_numeric_fields_that_once_crashed_the_build():
-    raw = {"rows": 487, "date": "2026-10-06", "close": 116.4499969, "ma5": 114.03,
-           "ma240": None, "k": float("nan"), "rsi": 73.61, "extra_dropped": 5}
+    raw = {"rows": 487, "date": "2026-10-06", "k": 89.21, "d": float("nan"),
+           "vol_ratio": 0.924, "extra_dropped": 5}
     w = bw.web_indicators(raw)
     assert w["date"] == "2026-10-06" and w["rows"] == 487
-    assert w["close"] == 116.45
-    assert w["ma240"] is None and w["k"] is None        # None and NaN both become null
+    assert w["k"] == 89.21 and w["vol_ratio"] == 0.92
+    assert w["d"] is None                               # NaN becomes null
     assert "extra_dropped" not in w
     json.dumps(w)                                       # must be serialisable
 
 
+def test_web_indicators_emit_only_what_needs_more_than_closing_prices():
+    """MA / RSI / MACD have ONE implementation (docs/analysis.js), run by the
+    page on the same closes. The server must not publish a second copy of them:
+    that is exactly how the scan's first pass and its second pass came to apply
+    different rules."""
+    raw = {"close": 116.4, "ma5": 114.0, "ma20": 110.0, "ma60": 100.0, "ma240": 86.0,
+           "rsi": 73.6, "hist": 0.5, "dif": 2.0, "macd": 1.5, "k": 89.2, "d": 82.4,
+           "vol_ratio": 0.92, "vol_ma20": 72_208_886.0, "rows": 487, "date": "2026-10-06"}
+    w = bw.web_indicators(raw)
+    for banned in ("close", "ma5", "ma20", "ma60", "ma240", "rsi", "hist", "dif", "macd"):
+        assert banned not in w, banned
+    assert set(w) == {"k", "d", "vol_ratio", "avg_lots", "rows", "date"}
+
+
 # ---------------------------------------------------------- process_symbol
 
-def _frame(closes, start="2025-01-01"):
+def _frame(closes, start="2025-01-01", divs=None):
+    """divs: {row_index: cash dividend per share on that (ex-)date}."""
     dates = pd.bdate_range(start, periods=len(closes)).strftime("%Y-%m-%d")
     c = pd.Series(closes, dtype=float)
+    div = pd.Series(0.0, index=c.index)
+    for i, amt in (divs or {}).items():
+        div.iloc[i] = amt
     return pd.DataFrame({"date": list(dates), "open": c, "high": c * 1.01,
-                         "low": c * 0.99, "close": c, "volume": 1000.0})
+                         "low": c * 0.99, "close": c, "volume": 1000.0, "div": div})
 
 
 def test_process_symbol_without_a_gap_keeps_everything():
@@ -171,7 +189,6 @@ def test_history_window_covers_two_years_so_older_buys_can_be_priced():
     assert bw.HISTORY_DAYS >= 480                       # ~2 trading years
     ind, hist, gap = bw.process_symbol(_frame([100.0] * 600))
     assert len(hist["p"]) == bw.HISTORY_DAYS
-    assert ind["ma240"] is not None
 
 
 def test_process_symbol_cuts_at_a_reverse_split_and_says_so():
@@ -180,8 +197,61 @@ def test_process_symbol_cuts_at_a_reverse_split_and_says_so():
     assert gap is not None and gap["ratio"] == 4.0
     assert ind["rows"] == 100                            # only the new regime
     assert max(hist["p"]) == 25.0                        # nothing from before the gap leaks in
-    assert ind["ma240"] is None                          # not enough post-gap rows: degrade, don't guess
-    assert ind["ma20"] == 25.0
+
+
+# --------------------------------------------------------------- dividends
+
+def test_dividends_are_kept_with_their_ex_dates():
+    ind, hist, gap = bw.process_symbol(_frame([100.0] * 300, divs={50: 4.5, 200: 5.0}))
+    dates = _frame([100.0] * 300)["date"]
+    assert hist["div"] == [[dates[50], 4.5], [dates[200], 5.0]]
+
+
+def test_a_symbol_that_pays_nothing_has_no_div_key():
+    _ind, hist, _gap = bw.process_symbol(_frame([100.0] * 300))
+    assert "div" not in hist
+
+
+def test_dividends_before_a_price_gap_are_dropped_with_the_prices():
+    """Before the gap the share units differ, so those dividends cannot be added
+    to a holding measured in today's units; they go with the old prices."""
+    closes = [100.0] * 200 + [25.0] * 100
+    _ind, hist, gap = bw.process_symbol(_frame(closes, divs={50: 9.9, 250: 1.0}))
+    assert gap is not None
+    assert [x[1] for x in hist["div"]] == [1.0]
+
+
+def test_dividends_outside_the_history_window_are_dropped():
+    n = bw.HISTORY_DAYS + 100
+    _ind, hist, _gap = bw.process_symbol(_frame([100.0] * n, divs={10: 7.0, n - 5: 2.0}))
+    assert [x[1] for x in hist["div"]] == [2.0]          # row 10 is older than the window
+
+
+def test_fractional_and_float_noise_dividends_survive_serialisation():
+    _ind, hist, _gap = bw.process_symbol(_frame([100.0] * 300, divs={60: 3.9996, 120: 0.675}))
+    json.dumps(hist)
+    assert [x[1] for x in hist["div"]] == [3.9996, 0.675]
+
+
+# ------------------------------------------------------------- closes.json
+
+def test_closes_share_one_date_axis_and_use_null_for_missing_days():
+    hs = {"A": {"d": ["2026-01-02", "2026-01-05", "2026-01-06"], "p": [10.0, 11.0, 12.0]},
+          "B": {"d": ["2026-01-05", "2026-01-06"], "p": [20.0, 21.0]},        # listed later
+          "C": {"d": ["2026-01-02", "2026-01-06"], "p": [30.0, 31.0]}}        # suspended on the 5th
+    c = bw.build_closes(hs)
+    assert c["d"] == ["2026-01-02", "2026-01-05", "2026-01-06"]
+    assert c["items"]["A"] == [10.0, 11.0, 12.0]
+    assert c["items"]["B"] == [None, 20.0, 21.0]
+    assert c["items"]["C"] == [30.0, None, 31.0]
+    json.dumps(c)
+
+
+def test_every_row_has_exactly_one_value_per_date():
+    hs = {str(i): {"d": [f"2026-01-{d:02d}" for d in range(2 + i % 3, 12)], "p": [1.0 + i] * (10 - i % 3)}
+          for i in range(30)}
+    c = bw.build_closes(hs)
+    assert all(len(row) == len(c["d"]) for row in c["items"].values())
 
 
 def test_process_symbol_empty_input_is_none():
@@ -257,3 +327,30 @@ def test_failed_mis_batch_is_retried_then_reported_not_fatal(monkeypatch):
 
 def test_stamp_is_taipei_time():
     assert bw.stamp().endswith("+08:00")
+
+
+# ------------------------------------------------- OHLCV for the candle chart
+
+def test_history_carries_open_high_low_and_volume_in_lots_aligned_with_the_dates():
+    df = _frame([100 + (i % 5) for i in range(300)])
+    df["volume"] = 250_000.0                                       # shares -> 250 lots
+    _ind, hist, _gap = bw.process_symbol(df)
+    n = len(hist["d"])
+    assert all(len(hist[k]) == n for k in ("p", "o", "h", "l", "v"))
+    assert set(hist["v"]) == {250}
+    assert all(l <= o <= h and l <= c <= h for o, h, l, c in zip(hist["o"], hist["h"], hist["l"], hist["p"]))
+
+
+def test_missing_open_or_volume_becomes_null_not_nan():
+    df = _frame([100.0] * 300)
+    df.loc[299, "open"] = float("nan"); df.loc[299, "volume"] = float("nan")
+    _ind, hist, _gap = bw.process_symbol(df)
+    assert hist["o"][-1] is None and hist["v"][-1] is None
+    json.loads(json.dumps(hist, allow_nan=False))                 # strict JSON: NaN would raise
+
+
+def test_the_gap_cut_applies_to_every_series():
+    _ind, hist, gap = bw.process_symbol(_frame([100.0] * 200 + [25.0] * 100))
+    assert gap is not None
+    assert len(hist["o"]) == len(hist["v"]) == len(hist["d"]) == 100
+    assert max(hist["h"]) < 30

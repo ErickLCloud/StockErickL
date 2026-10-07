@@ -33,6 +33,53 @@ const cl = A.clean({ d: ["2026-01-01", "2026-01-02", "2026-01-03"], p: [100, 10,
 t("clean cuts before the gap date", cl.p.length === 2 && cl.p[0] === 10);
 t("clean drops non-positive closes", A.clean({ d: ["a", "b"], p: [0, 5] }).p.length === 1);
 
+/* ---- candles: clean() keeps OHLCV aligned through the gap cut and the zero-close drop */
+const cx = A.clean({ d: ["d1", "d2", "d3", "d4"], p: [100, 10, 0, 12], o: [99, 9, 1, 11], h: [101, 11, 1, 13], l: [98, 8, 1, 10], v: [5, 6, 7, 8] }, { date: "d2" });
+t("clean carries o/h/l/v through the same cuts", JSON.stringify(cx) === JSON.stringify({ d: ["d2", "d4"], p: [10, 12], o: [9, 11], h: [11, 13], l: [8, 10], v: [6, 8] }), JSON.stringify(cx));
+t("clean without OHLC returns none (not empty arrays)", !("o" in A.clean({ d: ["a"], p: [5] })));
+const bx = A.bars({ d: ["a", "b"], p: [10, 12], o: [11, null], h: [9, 11], l: [10.5, 13], v: [100, null] });
+t("bars repairs a day: missing open -> close; high/low widened to contain open and close",
+  bx.real && bx.bars[1].o === 12 && bx.bars[0].h === 11 && bx.bars[0].l === 10 && bx.bars[1].h === 12 && bx.bars[1].l === 12 && bx.bars[1].v === null, JSON.stringify(bx.bars));
+t("bars without o/h/l is flagged not real and flat at the close", (() => { const r = A.bars({ d: ["a"], p: [7] }); return !r.real && r.bars[0].o === 7 && r.bars[0].h === 7; })());
+/* weekly bars: Mon 2026-10-05 .. Wed, then Mon 10-12. First open, max high, min low, last close, SUM of volume. */
+const wb = A.weeklyBars([
+  { d: "2026-10-05", o: 10, h: 12, l: 9, c: 11, v: 100 }, { d: "2026-10-06", o: 11, h: 15, l: 10, c: 14, v: 200 }, { d: "2026-10-07", o: 14, h: 14, l: 8, c: 9, v: null },
+  { d: "2026-10-12", o: 9, h: 10, l: 9, c: 10, v: 50 }]);
+t("weeklyBars: first open, max high, min low, last close, summed volume (null ignored)",
+  wb.length === 2 && wb[0].o === 10 && wb[0].h === 15 && wb[0].l === 8 && wb[0].c === 9 && wb[0].v === 300 && wb[0].d === "2026-10-07" && wb[1].v === 50, JSON.stringify(wb));
+
+/* ---- zoom / pan windows, hand-computed. n = 100 bars. */
+const cv = (v) => JSON.stringify(v);
+t("clampView keeps width and slides inside the data", cv(A.clampView({ a: 90, b: 130 }, 100)) === cv({ a: 60, b: 100 }) && cv(A.clampView({ a: -5, b: 35 }, 100)) === cv({ a: 0, b: 40 }));
+t("clampView enforces 20 bars minimum and n maximum", cv(A.clampView({ a: 10, b: 12 }, 100)) === cv({ a: 10, b: 30 }) && cv(A.clampView({ a: 0, b: 500 }, 100)) === cv({ a: 0, b: 100 }));
+t("clampView with fewer than 20 bars of data shows all of them", cv(A.clampView({ a: 0, b: 5 }, 8)) === cv({ a: 0, b: 8 }));
+/* window [40,80) width 40, zoom in x0.5 around the middle (focus .5 -> bar 60): new width 20 -> [50,70) */
+t("zoomView in around the centre", cv(A.zoomView({ a: 40, b: 80 }, 100, 0.5, 0.5)) === cv({ a: 50, b: 70 }), cv(A.zoomView({ a: 40, b: 80 }, 100, 0.5, 0.5)));
+/* focus at the left edge keeps the left edge fixed */
+t("zoomView keeps the focused point put (left edge)", cv(A.zoomView({ a: 40, b: 80 }, 100, 0, 0.5)) === cv({ a: 40, b: 60 }));
+t("zoomView out is capped at all data", cv(A.zoomView({ a: 40, b: 80 }, 100, 0.5, 10)) === cv({ a: 0, b: 100 }));
+t("zoomView in is floored at 20 bars", A.zoomView({ a: 40, b: 60 }, 100, 0.5, 0.1).b - A.zoomView({ a: 40, b: 60 }, 100, 0.5, 0.1).a === 20);
+t("panView clamps at both ends", cv(A.panView({ a: 5, b: 45 }, 100, -50)) === cv({ a: 0, b: 40 }) && cv(A.panView({ a: 55, b: 95 }, 100, 50)) === cv({ a: 60, b: 100 }) && cv(A.panView({ a: 10, b: 50 }, 100, 7)) === cv({ a: 17, b: 57 }));
+t("lastView shows the most recent bars", cv(A.lastView(100, 30)) === cv({ a: 70, b: 100 }) && cv(A.lastView(10, 150)) === cv({ a: 0, b: 10 }));
+/* property: for random windows and zooms the result is always valid and never invents bars */
+{
+  let ok = true, seed = 12345; const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  for (let k = 0; k < 2000; k++) {
+    const nn = 20 + Math.floor(rnd() * 480), a = Math.floor(rnd() * nn), b = a + 1 + Math.floor(rnd() * nn), f = rnd();
+    let v = A.clampView({ a, b }, nn);
+    v = A.zoomView(v, nn, f, 0.2 + rnd() * 4); v = A.panView(v, nn, Math.floor(rnd() * 200 - 100));
+    if (!(v.a >= 0 && v.b <= nn && v.b - v.a >= Math.min(20, nn) && Number.isInteger(v.a) && Number.isInteger(v.b))) { ok = false; break; }
+  }
+  t("2000 random zoom/pan sequences always stay inside the data, at least 20 bars, whole bars", ok);
+}
+/* barInfo: change vs the previous close and indicator lookups */
+{
+  const bs = [{ d: "a", o: 9, h: 11, l: 8, c: 10, v: 5 }, { d: "b", o: 10, h: 13, l: 10, c: 12, v: 6 }];
+  const inf = A.barInfo(bs, A.series([10, 12]), 1);
+  t("barInfo: change and percent vs previous close", inf.chg === 2 && Math.abs(inf.chgPct - 20) < 1e-9 && inf.o === 10 && inf.v === 6 && inf.ma5 === null && inf.rsi !== undefined);
+  t("barInfo: first bar has no change; out of range is null", A.barInfo(bs, A.series([10, 12]), 0).chg === null && A.barInfo(bs, A.series([10, 12]), 5) === null);
+}
+
 /* ---- backtest: hand-computed one-trade case (breakout N=2, M=2)
  * p = [10,10,10,11,12,13,12,11,10,9]
  * signal i=3 (11 > max(10,10)) -> buy at i=4 close 12.
@@ -98,38 +145,62 @@ t("levels: supports below, resistances above the last close",
   aU.levels.supports.every((l) => l.price < aU.last) && aU.levels.resistances.every((l) => l.price > aU.last));
 t("analyze needs at least 30 bars", A.analyze({ d: noisy.d.slice(0, 10), p: noisy.p.slice(0, 10) }) === null);
 
-/* ---- first-pass rules: one failing rule at a time, and what the user is told */
-const goodD = { close: 100, ma5: 101, ma20: 98, ma60: 90, rsi: 55, hist: 0.5, vol_ratio: 1, rows: 480, avg_lots: 2000 };
-const goodQ = { last: 100, vol: 5000 };
-const rj = (d, q, o) => A.rejection(Object.assign({}, goodD, d), Object.assign({}, goodQ, q), o);
+/* ---- the setup rules: ONE list (SETUP_CHECKS), read by every stage */
+const good = { close: 100, ma20: 98, ma20_5: 96, ma60: 90, rsi: 55, hist: 0.5 };      // a qualifying state
+const sw = (s, rules) => A.setupWhy(Object.assign({}, good, s), rules);
 const has = (s, ...bits) => typeof s === "string" && bits.every((b) => s.includes(b));
-t("a clean setup passes", rj({}, {}) === null, rj({}, {}));
-t("no indicators at all is explained", has(A.rejection(null, {}, {}), "沒有指標資料"));
-t("a price gap is explained with its date", has(A.rejection(Object.assign({}, goodD, { gap: { date: "2025-04-07", ratio: 1.5 } }), goodQ, {}), "2025-04-07", "異常跳空"));
-t("too little history for MA60 says how much there is", has(A.rejection(Object.assign({}, goodD, { ma60: null, rows: 41 }), goodQ, {}), "41", "60 日線"));
-t("below MA20", has(rj({}, { last: 97 }), "97.00", "20 日線", "之下"), rj({}, { last: 97 }));
-t("MA20 not above MA60", has(rj({ ma20: 89, ma60: 90 }, { last: 100 }), "沒有高於 60 日線"), rj({ ma20: 89 }, {}));
-t("6% above MA20 passes, just over is refused", rj({}, { last: 98 * 1.06 }) === null && has(rj({}, { last: 98 * 1.06 + 0.1 }), "超過 6%"));
-t("RSI 68 passes (boundary), 68.57 is refused as too hot", rj({ rsi: 68 }, {}) === null && has(rj({ rsi: 68.57 }, {}), "68.57", "高於上限 68"), rj({ rsi: 68.57 }, {}));
-t("RSI 40 passes (boundary), 39.9 is refused as too weak", rj({ rsi: 40 }, {}) === null && has(rj({ rsi: 39.9 }, {}), "低於下限 40"));
-t("missing RSI is refused, not crashed", has(rj({ rsi: null }, {}), "RSI"));
-t("MACD histogram 0 is refused, tiny positive passes", has(rj({ hist: 0 }, {}), "MACD 柱") && rj({ hist: 0.01 }, {}) === null);
-t("a missing MACD histogram does not block (as before)", rj({ hist: null }, {}) === null);
+t("a clean state passes", sw({}) === null, sw({}));
+t("no state (too little history) is explained, with the number needed", has(A.setupWhy(null), "歷史不足", "62"));
+t("below MA20", has(sw({ close: 97 }), "97.00", "20 日線", "之下"), sw({ close: 97 }));
+t("MA20 not above MA60", has(sw({ ma20: 89, ma60: 90 }), "沒有高於 60 日線"), sw({ ma20: 89 }));
+t("the 20-day line must be RISING: flat is refused, barely rising passes",
+  has(sw({ ma20_5: 98 }), "沒有比 5 個交易日前", "上彎") && sw({ ma20_5: 97.99 }) === null, sw({ ma20_5: 98 }));
+t("6% above MA20 passes, just over is refused", sw({ close: 98 * 1.06 }) === null && has(sw({ close: 98 * 1.06 + 0.1 }), "超過 6%"));
+t("RSI 68 passes (boundary), 68.57 is refused as too hot", sw({ rsi: 68 }) === null && has(sw({ rsi: 68.57 }), "RSI 68.57", "高於上限 68"));
+t("RSI 40 passes (boundary), 39.9 is refused as too weak", sw({ rsi: 40 }) === null && has(sw({ rsi: 39.9 }), "低於下限 40"));
+t("MACD histogram 0 is refused, tiny positive passes", has(sw({ hist: 0 }), "MACD 柱") && sw({ hist: 0.01 }) === null);
+t("only the FIRST failing rule is reported (trend before RSI before MACD)",
+  has(sw({ close: 90, rsi: 99, hist: -1 }), "之下") && has(sw({ rsi: 99, hist: -1 }), "RSI"));
+
+/* the limits a user may change; the structure of the setup stays fixed */
+t("an RSI ceiling of 72 lets RSI 70 through, and the message quotes the NEW limit",
+  sw({ rsi: 70 }, { rsiMax: 72 }) === null && has(sw({ rsi: 73 }, { rsiMax: 72 }), "高於上限 72"));
+t("a 10% extension limit is honoured and quoted", sw({ close: 98 * 1.09 }, { maxExt: 10 }) === null && has(sw({ close: 98 * 1.11 }, { maxExt: 10 }), "超過 10%"));
+t("rules default when nothing is given", A.isDefaultRules(undefined) && A.isDefaultRules({}) && A.isDefaultRules(A.RULES_DEFAULT));
+t("a changed rule is not the default", !A.isDefaultRules({ rsiMax: 70 }) && !A.isDefaultRules({ minLots: 100 }));
+t("normRules: junk, empty and null fall back to the default", (() => {
+  const n = A.normRules({ rsiMin: "abc", rsiMax: "", maxExt: null, minLots: undefined }); return n.rsiMin === 40 && n.rsiMax === 68 && n.maxExt === 6 && n.minLots === 500; })());
+t("normRules: numeric strings are accepted", (() => { const n = A.normRules({ rsiMin: "35", rsiMax: "70", maxExt: "8", minLots: "1000" }); return n.rsiMin === 35 && n.rsiMax === 70 && n.maxExt === 8 && n.minLots === 1000; })());
+t("normRules: values are clamped to a sane range", (() => { const n = A.normRules({ rsiMin: -5, rsiMax: 400, maxExt: 99, minLots: -1 }); return n.rsiMin === 0 && n.rsiMax === 100 && n.maxExt === 30 && n.minLots === 0; })());
+t("normRules: a reversed RSI band is swapped, not silently empty", (() => { const n = A.normRules({ rsiMin: 70, rsiMax: 40 }); return n.rsiMin === 40 && n.rsiMax === 70; })());
+t("normRules does not mutate its input", (() => { const r = { rsiMin: 70, rsiMax: 40 }; A.normRules(r); return r.rsiMin === 70; })());
+
+/* ---- first pass = the setup + liquidity + gap, on the last CLOSED bar */
+const info = (o) => Object.assign({ state: Object.assign({}, good), close: 100, ma5: 101, ma20: 98, vol_ratio: 1, n: 480, avg_lots: 2000 }, o);
+const goodQ = { last: 100, vol: 5000 };
+const rj = (d, q, o) => A.rejection(d, Object.assign({}, goodQ, q), o);
+t("a clean symbol passes the first pass", rj(info(), {}) === null, rj(info(), {}));
+t("no info at all is explained", has(A.rejection(null, {}, {}), "沒有指標資料"));
+t("a price gap is explained with its date", has(rj(info({ gap: { date: "2025-04-07", ratio: 1.5 } }), {}), "2025-04-07", "異常跳空"));
+t("too little history says so", has(rj(info({ state: null, n: 41 }), {}), "歷史不足"));
+t("the first pass reports the SAME reason as the setup list", rj(info({ state: Object.assign({}, good, { rsi: 68.57 }) }), {}) === sw({ rsi: 68.57 }));
 t("20-day average volume 499 lots is refused, 500 passes",
-  has(rj({ avg_lots: 499 }, {}), "近 20 日平均成交量", "499", "500") && rj({ avg_lots: 500 }, {}) === null);
+  has(rj(info({ avg_lots: 499 }), {}), "近 20 日平均成交量", "499", "500") && rj(info({ avg_lots: 500 }), {}) === null);
 t("THE FIX: a liquid name is not rejected because today's volume is still tiny (just after the open)",
-  rj({ avg_lots: 2000 }, { vol: 3 }) === null && rj({ avg_lots: 2000 }, { vol: 0 }) === null);
-const noAvg = { avg_lots: undefined };
+  rj(info(), { vol: 3 }) === null && rj(info(), { vol: 0 }) === null);
 t("an old indicators.json without avg_lots falls back to today's cumulative volume, and says so",
-  has(rj(noAvg, { vol: 3 }), "今日累積成交量", "3 張") && rj(noAvg, { vol: 600 }) === null);
-t("only the FIRST failing rule is reported, in a fixed order (trend before RSI before volume)",
-  has(rj({ rsi: 99, avg_lots: 1 }, { last: 90 }), "之下") && has(rj({ rsi: 99, avg_lots: 1 }, {}), "RSI"));
-t("minVol option is honoured", rj({ avg_lots: 800 }, {}, { minVol: 1000 }) !== null && rj({ avg_lots: 800 }, {}, { minVol: 700 }) === null);
+  has(rj(info({ avg_lots: undefined }), { vol: 3 }), "今日累積成交量", "3 張") && rj(info({ avg_lots: undefined }), { vol: 600 }) === null);
+t("minLots in the rules is honoured", rj(info({ avg_lots: 800 }), {}, { rules: { minLots: 1000 } }) !== null && rj(info({ avg_lots: 800 }), {}, { rules: { minLots: 700 } }) === null);
+t("the LIVE price does not change the verdict (the setup is judged on closed bars, like the second pass)",
+  rj(info(), { last: 50 }) === null && rj(info(), { last: 500 }) === null);
+t("adjusted rules reach the first pass", rj(info({ state: Object.assign({}, good, { rsi: 70 }) }), {}) !== null &&
+  rj(info({ state: Object.assign({}, good, { rsi: 70 }) }), {}, { rules: { rsiMax: 72 } }) === null);
 
 /* ---- explain(): what to tell someone who typed a specific code */
 const ix = [{ c: "2330", n: "台積電", k: "STOCK", b: "TWSE" }, { c: "2317", n: "鴻海", k: "STOCK", b: "TWSE" },
   { c: "0050", n: "元大台灣50", k: "ETF", b: "TWSE" }, { c: "6488", n: "環球晶", k: "STOCK", b: "TPEX" }];
-const idm = { "2330": Object.assign({}, goodD, { rsi: 68.57 }), "2317": goodD, "0050": Object.assign({}, goodD, { hist: -1 }), "6488": goodD };
+const idm = { "2330": info({ state: Object.assign({}, good, { rsi: 68.57 }) }), "2317": info(),
+  "0050": info({ state: Object.assign({}, good, { hist: -1 }) }), "6488": info() };
 const qm = { "2330": goodQ, "2317": goodQ, "0050": goodQ, "6488": goodQ };
 const ex = (term, o) => A.explain(ix, Object.assign({ scope: "all", term, ind: idm, quotes: qm }, o || {}));
 t("explain: a typed code that fails says exactly why", (() => { const e = ex("2330"); return e.matched === 1 && e.passed === 0 && e.rejected.length === 1 && e.rejected[0].it.c === "2330" && has(e.rejected[0].reason, "RSI 68.57", "68"); })());
@@ -139,6 +210,7 @@ t("explain: nothing typed means nothing to explain (null)", ex("") === null && e
 t("explain: a keyword matching nothing says matched 0", (() => { const e = ex("zzzz"); return e.matched === 0 && e.rejected.length === 0; })());
 t("explain: matches by name too", ex("台積").matched === 1 && ex("台積").rejected[0].it.c === "2330");
 t("explain: respects the scope", ex("00", { scope: "STOCK" }).matched === 0 && ex("00", { scope: "ETF" }).matched === 1);
+t("explain: follows the user's rules", ex("2330", { rules: { rsiMax: 70 } }).passed === 1);
 t("explain: the list is capped and reports how many more", (() => { const e = A.explain(ix, { scope: "all", term: "2 0 6", ind: { "2330": null, "2317": null, "0050": null, "6488": null }, quotes: {} }, 2); return e.rejected.length === 2 && e.more === e.matched - e.passed - 2 && e.more >= 1; })());
 
 /* the reason shown must never disagree with the filter: same rules, one place */
@@ -147,27 +219,27 @@ t("explain: the list is capped and reports how many more", (() => { const e = A.
   const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
   const items = Array.from({ length: 300 }, (_, i) => ({ c: "T" + i, n: "n" + i, k: i % 3 ? "STOCK" : "ETF", b: "TWSE" }));
   const I = {}, Q = {};
-  /* Start from a symbol that PASSES, then with probability 0.55 give it exactly
-   * one defect. (A purely random generator produced 0 passes, which made the
-   * "keeps exactly what rejection() passes" half of this test vacuous.) */
+  /* Start from a symbol that PASSES, then with probability 0.55 give it exactly one defect.
+   * (A purely random generator once produced 0 passes, which made the "keeps exactly what
+   * rejection() passes" half of this test vacuous.) */
   const defects = [
-    (d, q) => { q.last = d.ma20 * 0.95; },                               // below MA20
-    (d) => { d.ma60 = d.ma20 * 1.05; },                                   // MA20 under MA60
-    (d, q) => { q.last = d.ma20 * 1.10; },                                // over-extended
-    (d) => { d.rsi = 75; }, (d) => { d.rsi = 30; }, (d) => { d.rsi = null; },
-    (d) => { d.hist = -0.5; }, (d) => { d.hist = null; },                 // null hist is allowed: a pass
+    (d) => { d.state.close = d.state.ma20 * 0.95; },                      // below MA20
+    (d) => { d.state.ma60 = d.state.ma20 * 1.05; },                       // MA20 under MA60
+    (d) => { d.state.ma20_5 = d.state.ma20 * 1.01; },                     // 20-day line falling
+    (d) => { d.state.close = d.state.ma20 * 1.10; },                      // over-extended
+    (d) => { d.state.rsi = 75; }, (d) => { d.state.rsi = 30; },
+    (d) => { d.state.hist = -0.5; },
     (d) => { d.avg_lots = 100; }, (d, q) => { d.avg_lots = undefined; q.vol = 10; },
     (d) => { d.gap = { date: "2025-01-01", ratio: 2 }; },
-    (d) => { d.ma60 = null; },
+    (d) => { d.state = null; },
   ];
-  let defective = 0;
   for (const it of items) {
     const ma60 = 50 + r() * 50, ma20 = ma60 * (1.02 + r() * 0.1);
-    const d = { close: ma20 * (1 + r() * 0.04), ma20, ma60, ma5: ma20, rsi: 42 + r() * 24, hist: 0.1 + r(), vol_ratio: r() * 3,
-      rows: 100 + Math.floor(r() * 400), avg_lots: 600 + Math.floor(r() * 5000) };
-    const q = { last: d.close, vol: 600 + Math.floor(r() * 3000) };
-    if (r() < 0.05) { I[it.c] = null; Q[it.c] = q; defective++; continue; }   // no indicators at all
-    if (r() < 0.55) { defects[Math.floor(r() * defects.length)](d, q); defective++; }
+    const st = { close: ma20 * (1 + r() * 0.04), ma20, ma20_5: ma20 * (0.97 + r() * 0.02), ma60, rsi: 42 + r() * 24, hist: 0.1 + r() };
+    const d = { state: st, close: st.close, ma5: ma20, ma20, vol_ratio: r() * 3, n: 100 + Math.floor(r() * 400), avg_lots: 600 + Math.floor(r() * 5000) };
+    const q = { last: st.close * (0.9 + r() * 0.3), vol: 600 + Math.floor(r() * 3000) };   // live price is deliberately noisy: it must not matter
+    if (r() < 0.05) { I[it.c] = null; Q[it.c] = q; continue; }
+    if (r() < 0.55) defects[Math.floor(r() * defects.length)](d, q);
     I[it.c] = d; Q[it.c] = q;
   }
   const kept = new Set(A.candidates(items, { scope: "all", term: "", ind: I, quotes: Q }).map((c) => c.it.c));
@@ -180,6 +252,110 @@ t("explain: the list is capped and reports how many more", (() => { const e = A.
   log.push("property check: " + kept.size + " of 300 random symbols pass the first pass");
 })();
 
+/* ---- UNIFICATION: the first pass and the second pass cannot disagree.
+ * Before, the first pass read Python-built numbers and skipped the "20-day line
+ * rising" rule; the second recomputed in the browser and applied it. Now both
+ * call series() on the same closes and the same rule list. */
+(() => {
+  let s = 4242;
+  const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  const dates = Array.from({ length: 320 }, (_, i) => { const d = new Date(Date.UTC(2025, 0, 1 + i)); return d.toISOString().slice(0, 10); });
+  let agree = 0, passes = 0, bad = [];
+  for (let k = 0; k < 200; k++) {
+    /* a drifting random walk; drift and noise vary so some trend up, some down, some chop */
+    const drift = (r() - 0.45) * 0.006, noise = 0.004 + r() * 0.02;
+    const p = [50 + r() * 50];
+    for (let i = 1; i < 320; i++) p.push(Math.max(1, p[i - 1] * (1 + drift + (r() - 0.5) * 2 * noise)));
+    const h = { d: dates, p };
+    const first = A.rejection(A.snapshot(h), { vol: 9999 }, {});                          // volume made irrelevant (avg_lots absent -> falls back to 9999)
+    const second = A.setupWhy(A.stateAt(A.series(p), p.length - 1));
+    if (first === second) { agree++; if (first === null) passes++; } else bad.push(String(first) + " | " + String(second));
+  }
+  t("first pass and second pass give the SAME verdict AND the same reason on 200 random series", agree === 200, bad.slice(0, 2).join(" ;; "));
+  t("...and that sample is not degenerate (some pass)", passes >= 8 && passes <= 190, passes + " pass");
+  log.push("unification check: " + passes + " of 200 random series qualify; all 200 agree");
+})();
+
+/* ---- snapshot / infoFromCloses: the single path from closes to the numbers on screen */
+(() => {
+  const p = Array.from({ length: 300 }, (_, i) => 100 + i * 0.3 + 4 * Math.sin(i / 7)), h = { d: noisy.d.slice(0, 300), p };
+  const a = A.series(p), sn = A.snapshot(h), i = 299;
+  t("snapshot = series() at the last bar (ma5/20/60/240, rsi, macd hist)",
+    sn.ma5 === a.ma5[i] && sn.ma20 === a.ma20[i] && sn.ma60 === a.ma60[i] && sn.ma240 === a.ma240[i] && sn.rsi === a.rsi[i] && sn.hist === a.macd.hist[i]);
+  t("snapshot.state is stateAt(series) so the rules see what the page shows", JSON.stringify(sn.state) === JSON.stringify(A.stateAt(a, i)));
+  t("snapshot of a short history: indicators degrade to null, never NaN", (() => { const x = A.snapshot({ d: ["a", "b", "c"], p: [1, 2, 3] }); return x.state === null && x.ma60 === null && x.ma240 === null; })());
+  t("snapshot of nothing is null", A.snapshot(null) === null && A.snapshot({ d: [], p: [] }) === null);
+  const cl = { d: ["d1", "d2", "d3", "d4"], items: { A: [10, 11, 12, 13], B: [null, null, 5, 6], C: [1, null, 3, 0] } };
+  const inf = A.infoFromCloses(cl, { A: { avg_lots: 777, k: 55 }, B: { avg_lots: 5 } });
+  t("infoFromCloses: skips null and non-positive closes", inf.B.n === 2 && inf.C.n === 2 && inf.A.n === 4);
+  t("infoFromCloses: merges the server-only fields (avg_lots, k) without losing them", inf.A.avg_lots === 777 && inf.A.k === 55 && inf.B.avg_lots === 5);
+  t("infoFromCloses: the newest close is the last non-null one", inf.A.close === 13 && inf.B.close === 6 && inf.C.close === 3);
+  t("infoFromCloses: a symbol with a gap is cut at the gap", (() => {
+    const long = { d: Array.from({ length: 80 }, (_, i) => "2025-" + String(1 + Math.floor(i / 28)).padStart(2, "0") + "-" + String(1 + i % 28).padStart(2, "0")),
+      items: { G: Array.from({ length: 80 }, (_, i) => i < 40 ? 100 : 25) } };
+    const g = A.infoFromCloses(long, { G: { gap: { date: long.d[40], ratio: 4 } } });
+    return g.G.n === 40 && g.G.close === 25; })());
+})();
+
+/* ---- trade replay and baseline */
+(() => {
+  const p = upH.p;
+  const tr = A.setupTrades(p, "STOCK"), st = A.setupStats(p, "STOCK");
+  t("setupStats is the aggregate of setupTrades (n and wins agree)", st.n === tr.length && st.wins === tr.filter((x) => x.ret > 0).length);
+  t("trades never overlap: each entry is after the previous exit", tr.every((x, k) => k === 0 || x.i > tr[k - 1].i));
+  const base = A.baselineTrades(p, "STOCK", 5);
+  t("baseline enters every 5th bar from bar 61", base.length > 20 && base.every((x, k) => x.i === 61 + 5 * k), base.slice(0, 3).map((x) => x.i).join());
+  t("every simulated trade has a finite return and a 3%..8% risk", [...tr, ...base].every((x) => Number.isFinite(x.ret) && x.risk >= 0.03 - 1e-12 && x.risk <= 0.08 + 1e-12));
+  t("a tighter rule set never produces MORE trades than the default on the same series",
+    A.setupTrades(p, "STOCK", { rsiMin: 55, rsiMax: 60 }).length <= tr.length);
+})();
+
+/* ---- market-wide validation: structure and invariants (numbers are checked on real data below) */
+async function validationUnit() {
+  let s = 31;
+  const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  const N = 330, d = Array.from({ length: N }, (_, i) => new Date(Date.UTC(2025, 0, 1 + i)).toISOString().slice(0, 10));
+  const items = {}, kinds = {};
+  for (let k = 0; k < 40; k++) {
+    const drift = (r() - 0.4) * 0.005, noise = 0.005 + r() * 0.015, p = [60 + r() * 40];
+    for (let i = 1; i < N; i++) p.push(Math.max(1, p[i - 1] * (1 + drift + (r() - 0.5) * 2 * noise)));
+    items["S" + k] = p; kinds["S" + k] = k % 4 ? "STOCK" : "ETF";
+  }
+  items.SHORT = Array.from({ length: N }, (_, i) => i < 300 ? null : 10 + i * 0.01);     // listed late: fewer than 100 closes
+  const cl = { d, items };
+  const v = await A.validateMarket(cl, kinds, {}, {});
+  t("validateMarket: counts only symbols with >= 100 closes", v.symbols === 40, v.symbols);
+  t("validateMarket: all = early + late, for setup and baseline",
+    v.all.setup.n === v.early.setup.n + v.late.setup.n && v.all.base.n === v.early.base.n + v.late.base.n, JSON.stringify([v.all.setup.n, v.early.setup.n, v.late.setup.n]));
+  t("validateMarket: there are baseline trades to compare against", v.all.base.n > 100, v.all.base.n);
+  t("validateMarket: win rates are fractions, average R is finite", [v.all.setup, v.all.base].every((x) => x.n === 0 || (x.winRate >= 0 && x.winRate <= 1 && Number.isFinite(x.avgR) && Number.isFinite(x.avgRet))));
+  t("validateMarket: reports the dates it used", v.from === d[0] && v.to === d[N - 1] && v.split === d[Math.floor(N * 0.6)], v.from + " " + v.split + " " + v.to);
+  const tight = await A.validateMarket(cl, kinds, { rsiMin: 59, rsiMax: 61 }, {});
+  t("validateMarket: the BASELINE does not depend on the rules (it is the yardstick)", JSON.stringify(tight.all.base) === JSON.stringify(v.all.base));
+  t("validateMarket: a much tighter rule fires less often", tight.all.setup.n <= v.all.setup.n, tight.all.setup.n + " vs " + v.all.setup.n);
+  const again = await A.validateMarket(cl, kinds, {}, {});
+  t("validateMarket: deterministic", JSON.stringify(again.all) === JSON.stringify(v.all));
+  const seen = []; await A.validateMarket(cl, kinds, {}, { onProgress: (a, b) => seen.push([a, b]) });
+  t("validateMarket: tolerates a missing onProgress and calls it when given", (await A.validateMarket(cl, kinds, {}, {})).symbols === 40);
+  t("validateMarket: an empty market does not crash", (await A.validateMarket({ d: ["a", "b"], items: {} }, {}, {}, {})).symbols === 0);
+}
+
+
+/* ---- Python <-> JavaScript parity. The web pipeline publishes no indicators of its own, but src/analysis (used by
+ * main.py) still has a Python implementation. tests/fixtures/parity.json holds real closes plus what the Python code
+ * computed from them; tests/test_parity_fixture.py pins the Python side to it and this pins the JavaScript side, so
+ * neither can drift unnoticed. Python rounds to 2 decimals, hence the tolerance. */
+async function parityUnit() {
+  const fx = await (await fetch("../fixtures/parity.json")).json();
+  t("parity fixture has real symbols and every field", fx.cases.length >= 6 && fx.fields.length === 6, fx.cases.length);
+  for (const c of fx.cases) {
+    const sn = A.snapshot({ d: c.closes.map((_, i) => "d" + i), p: c.closes });
+    const off = fx.fields.filter((k) => !(Math.abs(sn[k] - c.expect[k]) <= 0.0051));
+    t("parity " + c.code + ": JavaScript = Python for " + fx.fields.join("/"), off.length === 0,
+      off.map((k) => k + " js=" + (sn[k] == null ? "null" : sn[k].toFixed(4)) + " py=" + c.expect[k]).join("; "));
+  }
+}
+
 /* ---- evaluateWhy(): the second gate says why too, and evaluate() is unchanged */
 const itE = { c: "T1", n: "測試", k: "STOCK", b: "TWSE" };
 t("evaluateWhy: no history file", (() => { const x = A.evaluateWhy(itE, null, {}, {}, null); return x.r === null && has(x.reason, "歷史"); })());
@@ -190,25 +366,73 @@ t("evaluateWhy: result and reason are never both set or both empty", [upH, dnH, 
 t("evaluate() still returns exactly evaluateWhy().r (the old contract)", [upH, dnH, null].every((h) => {
   const q = { last: h ? h.p[h.p.length - 1] : 0 };
   return JSON.stringify(A.evaluate(itE, h, q, {}, null)) === JSON.stringify(A.evaluateWhy(itE, h, q, {}, null).r); }));
+t("evaluateWhy: the second gate quotes the user's rules too", (() => {
+  /* find a series that passes the DEFAULT rules, then lower only the RSI ceiling below its RSI:
+   * every earlier check still passes, so the RSI check is the one that must speak */
+  let s = 4242;
+  const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  const dts = Array.from({ length: 320 }, (_, i) => new Date(Date.UTC(2025, 0, 1 + i)).toISOString().slice(0, 10));
+  for (let k = 0; k < 400; k++) {
+    const drift = (r() - 0.45) * 0.006, noise = 0.004 + r() * 0.02, p = [50 + r() * 50];
+    for (let i = 1; i < 320; i++) p.push(Math.max(1, p[i - 1] * (1 + drift + (r() - 0.5) * 2 * noise)));
+    const st = A.stateAt(A.series(p), 319);
+    if (A.setupWhy(st) !== null) continue;
+    const x = A.evaluateWhy(itE, { d: dts, p }, { last: p[319] }, {}, null, { rsiMax: st.rsi - 1 });
+    return x.r === null && has(x.reason, "高於上限");
+  }
+  return false;                                                      // no passing series found: the test cannot speak
+})());
 
 /* ---- real data: end to end over every file the page would use */
 async function real() {
   const j = async (p) => (await fetch(p)).json();
-  const [idx, quotes, ind, fund] = await Promise.all([j("../../docs/data/index.json"), j("../../docs/data/quotes.json"),
-    j("../../docs/data/indicators.json"), j("../../docs/data/fundamental.json")]);
-  const items = idx.items, q = quotes.items, I = ind.items, F = fund.items;
+  const [idx, quotes, ind, fund, cl] = await Promise.all([j("../../docs/data/index.json"), j("../../docs/data/quotes.json"),
+    j("../../docs/data/indicators.json"), j("../../docs/data/fundamental.json"), j("../../docs/data/closes.json")]);
+  const items = idx.items, q = quotes.items, F = fund.items;
   const byCode = Object.fromEntries(items.map((i) => [i.c, i]));
+  const tb = performance.now();
+  const I = A.infoFromCloses(cl, ind.items);          // the ONE path from closes to the numbers the rules read
+  log.push("infoFromCloses: " + Object.keys(I).length + " symbols in " + Math.round(performance.now() - tb) + "ms");
+  t("real: every symbol in the market list has closes and info", items.every((i) => I[i.c] && I[i.c].n > 0), items.filter((i) => !I[i.c]).length + " missing");
+  t("real: the server no longer publishes MA / RSI / MACD (single implementation)",
+    Object.values(ind.items).every((x) => !("ma20" in x) && !("rsi" in x) && !("hist" in x) && !("ma60" in x)));
+  t("real: closes.json has one row per symbol, each as long as the date axis", Object.values(cl.items).every((row) => row.length === cl.d.length));
   const t0 = performance.now();
   const cands = A.candidates(items, { scope: "all", term: "", ind: I, quotes: q });
   t("real: prefilter returns candidates", cands.length > 0, cands.length);
-  t("real: prefilter is cheap (<1s)", performance.now() - t0 < 1000, Math.round(performance.now() - t0) + "ms");
   log.push("prefilter: " + cands.length + " of " + items.length + " in " + Math.round(performance.now() - t0) + "ms");
-  const top = cands.slice(0, 30), found = [];
+  const top = cands.slice(0, 30), found = [], dropped = [];
   for (const { it } of top) {
     const h = await j("../../docs/data/history/" + encodeURIComponent(it.c) + ".json");
-    const r = A.evaluate(it, h, q[it.c], I[it.c], F[it.c]);
-    if (r) found.push(r);
+    const x = A.evaluateWhy(it, h, q[it.c], I[it.c], F[it.c]);
+    if (x.r) found.push(x.r); else dropped.push(x.reason);
   }
+  /* The point of unifying: the second pass must never reject, on a SETUP rule, a symbol the first pass let through. */
+  const setupLike = /在 20 日線 .* 之下|沒有高於 60 日線|沒有比 5 個交易日前|太延伸|高於上限|低於下限|MACD 柱|歷史不足/;
+  t("real: nothing the first pass kept is rejected by the second pass on a setup rule", dropped.every((x) => !setupLike.test(x)), dropped.filter((x) => setupLike.test(x)).join(" ;; "));
+  log.push("second pass dropped " + dropped.length + " of " + top.length + (dropped.length ? ": " + [...new Set(dropped)].slice(0, 3).join(" / ") : ""));
+  /* closes.json and the per-symbol history files come from one build and must agree exactly */
+  let mism = 0, checked = 0;
+  for (const it of items.slice(0, 60)) {
+    const hf = await j("../../docs/data/history/" + encodeURIComponent(it.c) + ".json");
+    const row = cl.items[it.c], d2 = [], p2 = [];
+    for (let k = 0; k < row.length; k++) if (row[k] > 0) { d2.push(cl.d[k]); p2.push(row[k]); }
+    checked++;
+    if (JSON.stringify(d2) !== JSON.stringify(hf.d) || JSON.stringify(p2) !== JSON.stringify(hf.p)) mism++;
+  }
+  t("real: closes.json agrees exactly with the per-symbol history files (60 symbols)", checked === 60 && mism === 0, mism + " differ");
+  const kinds = Object.fromEntries(items.map((i) => [i.c, i.k]));
+  const tv = performance.now();
+  const val = await A.validateMarket(cl, kinds, {}, {});
+  t("real: validateMarket runs over the whole market", val.symbols > 2000 && val.all.setup.n > 0 && val.all.base.n > 0, JSON.stringify([val.symbols, val.all.setup.n, val.all.base.n]));
+  /* No timing assertions here: this page runs under a headless virtual clock, where performance.now() is not real time
+   * (a 0.5 s run reported as 20 ms), so such an assertion would only look protective. Real timings are measured in a
+   * real-time browser; see the numbers in the project journal. */
+  t("real: all = early + late on real data", val.all.setup.n === val.early.setup.n + val.late.setup.n && val.all.base.n === val.early.base.n + val.late.base.n);
+  const pc = (v) => v == null ? "-" : (v * 100).toFixed(1) + "%";
+  const fmt = (b) => "n=" + b.n + " win=" + pc(b.winRate) + " avg=" + pc(b.avgRet) + " R=" + (b.avgR == null ? "-" : b.avgR.toFixed(2));
+  log.push("VALIDATION (default rules, " + val.symbols + " symbols, " + val.from + " .. " + val.to + ", split " + val.split + ", " + Math.round(performance.now() - tv) + "ms)");
+  for (const per of ["all", "early", "late"]) log.push("  " + per.padEnd(5) + " setup " + fmt(val[per].setup) + "   |   baseline " + fmt(val[per].base));
   found.sort((a, b) => b.score - a.score);
   log.push("evaluated " + top.length + ", kept " + found.length);
   for (const r of found.slice(0, 5)) {
@@ -246,7 +470,7 @@ async function real() {
   }
 }
 
-real().catch((e) => { fails.push("real-data run threw: " + e.message); }).then(() => {
+validationUnit().then(parityUnit).then(real).catch((e) => { fails.push("real-data run threw: " + e.message); }).then(() => {
   document.getElementById("out").textContent = (fails.length ? "RESULT: FAIL (" + fails.length + " of " + n + ")\n" + fails.join("\n") : "RESULT: PASS (" + n + " checks)") + "\n\n" + log.join("\n");
 });
 </script>

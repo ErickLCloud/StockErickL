@@ -123,6 +123,41 @@ t("works on a long series (binary search)", (() => {
   return C.priceOnOrBefore({ d, p }, d[321]).price === 100 + 321 && C.priceOnOrBefore({ d, p }, d[499]).price === 599;
 })());
 
+/* ---- dividends: real 2330 ex-dividend rows (they match TWSE's own table), hand-summed */
+const H2330 = { d: ["2024-10-07", "2025-03-14", "2026-10-06"],
+  div: [["2025-03-18", 4.5], ["2025-06-12", 4.5], ["2025-09-16", 5], ["2025-12-11", 5], ["2026-03-17", 6], ["2026-06-11", 6], ["2026-09-16", 7]] };
+const TODAY = "2026-10-06";
+const dv = (buy, today) => C.dividendsFor(H2330, buy, today || TODAY);
+t("dividends: bought before the first ex-date gets all seven (38.0 per share)", dv("2025-03-14").perShare === 38 && dv("2025-03-14").count === 7, JSON.stringify(dv("2025-03-14")));
+t("dividends: buying the DAY BEFORE an ex-date still gets it", dv("2025-03-17").perShare === 38);
+t("dividends: buying ON the ex-date does NOT get that dividend (you must hold before it)", dv("2025-03-18").perShare === 33.5 && dv("2025-03-18").count === 6, dv("2025-03-18").perShare);
+t("dividends: an ex-date after 'today' is not counted", dv("2025-03-14", "2026-09-15").perShare === 31 && dv("2025-03-14", "2026-09-16").perShare === 38);
+t("dividends: complete when the buy date is inside the history window", dv("2025-03-14").complete === true && dv("2024-10-07").complete === true);
+t("dividends: NOT complete when the buy date predates the window (a floor, not the whole story)", dv("2024-01-01").complete === false);
+t("dividends: reports how far the history reaches", dv("2025-03-14").through === "2026-10-06");
+t("dividends: a symbol that paid nothing is 0, not unknown", C.dividendsFor({ d: ["2025-01-01"] }, "2025-02-01", TODAY).perShare === 0);
+t("dividends: no history or a bad date is unknown (null), never 0",
+  C.dividendsFor(null, "2025-03-14", TODAY) === null && C.dividendsFor({ d: [] }, "2025-03-14", TODAY) === null && C.dividendsFor(H2330, "2025-02-30", TODAY) === null);
+t("dividends: input is not mutated", (() => { const before = JSON.stringify(H2330); dv("2025-03-14"); return JSON.stringify(H2330) === before; })());
+
+const lot2330 = { code: "2330", date: "2025-03-14", shares: 1000, cost: 1850 };
+const mDiv = C.lotMetrics(lot2330, 2585, TODAY, dv("2025-03-14"));
+t("total return: price pnl 735,000 + dividends 38,000 = 773,000", near(mDiv.pnl, 735000, 0.01) && near(mDiv.div, 38000, 0.01) && near(mDiv.total, 773000, 0.01), JSON.stringify(mDiv));
+t("total return %: 773,000 / 1,850,000 = 41.784% (price-only 39.730%)", near(mDiv.totRetPct, 41.7838, 1e-3) && near(mDiv.retPct, 39.7297, 1e-3), mDiv.totRetPct);
+t("total annualised: ((2585 + 38) / 1850) ^ (365 / 571) - 1 = 25.0%", near(mDiv.totAnnPct, 25.0, 0.1) && mDiv.days === 571, mDiv.totAnnPct);
+t("price-only fields are unchanged by passing dividends", near(mDiv.annPct, (Math.pow(2585 / 1850, 365 / 571) - 1) * 100, 1e-9));
+const mNoDiv = C.lotMetrics(lot2330, 2585, TODAY);
+t("without dividend info, total is UNKNOWN (null), not price-only dressed up as total", mNoDiv.div === null && mNoDiv.total === null && mNoDiv.totRetPct === null && near(mNoDiv.pnl, 735000, 0.01));
+t("dividends are reported even when there is no price (a lot never loses information)", (() => { const m = C.lotMetrics(lot2330, null, TODAY, dv("2025-03-14")); return near(m.div, 38000, 0.01) && m.total === null && m.pnl === null; })());
+t("a young lot (<30 days) has no annualised figure, with or without dividends", (() => { const m = C.lotMetrics({ cost: 100, shares: 10, date: "2026-09-28" }, 110, TODAY, { perShare: 1, complete: true }); return m.totAnnPct === null && m.annPct === null && near(m.total, 110, 1e-9); })());
+t("a dividend can turn a price loss into a total gain", (() => { const m = C.lotMetrics({ cost: 100, shares: 100, date: "2025-01-01" }, 97, TODAY, { perShare: 5, complete: true }); return m.pnl === -300 && m.total === 200 && m.totRetPct === 2; })());
+
+const tm = C.totals([mDiv, mNoDiv, C.lotMetrics({ cost: 10, shares: 100, date: "2025-01-01" }, null, TODAY)]);
+t("totals: dividends and total include only lots with known dividends", near(tm.div, 38000, 0.01) && near(tm.total, tm.pnl + 38000, 0.01), JSON.stringify(tm));
+t("totals: a lot with unknown dividends is COUNTED, not treated as paying nothing", tm.divUnknown === 1 && tm.unpriced === 1, tm.divUnknown + "/" + tm.unpriced);
+t("totals: incomplete dividend coverage is flagged", C.totals([C.lotMetrics({ cost: 10, shares: 100, date: "2024-01-01" }, 12, TODAY, { perShare: 1, complete: false })]).divIncomplete === 1);
+t("totals of nothing: no NaN", (() => { const z = C.totals([]); return z.div === 0 && z.total === 0 && z.totRetPct === null; })());
+
 /* ---- import validation */
 const ok = C.parseLots(JSON.stringify([{ code: "0050", date: "2025-03-14", shares: 1000, cost: 168.5, note: "首批" }]));
 t("import: a valid lot passes", ok.lots.length === 1 && ok.rejected.length === 0 && ok.lots[0].note === "首批");

@@ -51,16 +51,41 @@
     return new Date(now || Date.now()).toLocaleDateString("sv-SE", { timeZone: "Asia/Taipei" });
   }
 
+  /* Cash dividends per share a holder since `buyISO` received by `todayISO`.
+   * h = a symbol's history file: {d: [ISO dates], div: [[exDate, perShare], ...]}.
+   *
+   * A buyer must hold BEFORE the ex-date, so a dividend whose ex-date is the
+   * buy date or earlier is not theirs. `complete` is false when the buy date is
+   * earlier than the history window: dividends before the window cannot be seen,
+   * so the figure is a floor, not the whole story. `through` is the last date
+   * the history covers, so a stale history is visible to the caller.
+   * Amounts are in today's share units (the same units as the adjusted prices):
+   * 0050's January 2025 dividend is 0.675 here but 2.70 as TWSE paid it, because
+   * of the 1-for-4 split since. null when the history cannot say anything. */
+  function dividendsFor(h, buyISO, todayISO) {
+    if (!h || !Array.isArray(h.d) || !h.d.length || !validISO(buyISO)) return null;
+    const rows = (h.div || []).filter((x) => x[0] > buyISO && x[0] <= todayISO);
+    return { perShare: rows.reduce((s, x) => s + x[1], 0), count: rows.length, rows,
+             complete: buyISO >= h.d[0], through: h.d[h.d.length - 1] };
+  }
+
   /* Same definitions as the Python side (src/holdings.py):
-   *   pnl      = (last - cost) * shares
+   *   pnl      = (last - cost) * shares                      (price only)
    *   return % = (last / cost - 1) * 100
    *   annual % = ((last / cost) ** (365 / days) - 1) * 100, only when held >= 30 days
-   * Fees and the securities transaction tax are NOT included. */
-  function lotMetrics(lot, last, today) {
+   * Given `div` (from dividendsFor) it also reports the dividends received and
+   * the TOTAL return, which adds the dividends per share to the price:
+   *   total pnl = pnl + dividends * shares
+   *   total %   = total pnl / cost value * 100
+   *   total annual % = (((last + dividends per share) / cost) ** (365 / days) - 1) * 100
+   * Dividends are not reinvested; fees, the transaction tax, the dividend
+   * withholding / supplementary health premium are NOT included. */
+  function lotMetrics(lot, last, today, div) {
     const cost = lot.cost, shares = lot.shares;
-    const out = { costValue: cost * shares, value: null, pnl: null,
-                  retPct: null, days: null, annPct: null };
+    const out = { costValue: cost * shares, value: null, pnl: null, retPct: null, days: null, annPct: null,
+                  div: null, divComplete: null, total: null, totRetPct: null, totAnnPct: null };
     out.days = validISO(lot.date) && validISO(today) ? isoDays(lot.date, today) : null;
+    if (div) { out.div = div.perShare * shares; out.divComplete = div.complete; }
     if (last == null || !(last > 0) || !(cost > 0)) return out;
     out.value = last * shares;
     out.pnl = (last - cost) * shares;
@@ -68,20 +93,30 @@
     if (out.days != null && out.days >= 30) {
       out.annPct = (Math.pow(last / cost, 365 / out.days) - 1) * 100;
     }
+    if (div) {
+      out.total = out.pnl + out.div;
+      out.totRetPct = (out.total / out.costValue) * 100;
+      if (out.days != null && out.days >= 30)
+        out.totAnnPct = (Math.pow((last + div.perShare) / cost, 365 / out.days) - 1) * 100;
+    }
     return out;
   }
 
   /* Totals over the lots that have a price. Unpriced lots are counted, not
-   * silently folded in, so the total cannot understate a loss. */
+   * silently folded in, so the total cannot understate a loss. Likewise a lot
+   * whose dividends are unknown is counted in `divUnknown` and contributes
+   * price-only to `total`, instead of being quietly treated as "paid nothing". */
   function totals(metrics) {
-    let cost = 0, value = 0, unpriced = 0;
+    let cost = 0, value = 0, unpriced = 0, div = 0, divUnknown = 0, divIncomplete = 0;
     for (const m of metrics) {
       if (m.value == null) { unpriced++; continue; }
       cost += m.costValue;
       value += m.value;
+      if (m.div == null) divUnknown++; else { div += m.div; if (m.divComplete === false) divIncomplete++; }
     }
     const pnl = value - cost;
-    return { cost, value, pnl, retPct: cost > 0 ? (pnl / cost) * 100 : null, unpriced };
+    return { cost, value, pnl, retPct: cost > 0 ? (pnl / cost) * 100 : null, unpriced,
+             div, total: pnl + div, totRetPct: cost > 0 ? ((pnl + div) / cost) * 100 : null, divUnknown, divIncomplete };
   }
 
   function ageMinutes(iso, nowMs) {
@@ -153,6 +188,6 @@
     return { lots, rejected };
   }
 
-  root.Calc = { isoDays, validISO, taipeiToday, priceOnOrBefore, lotMetrics, totals, ageMinutes,
+  root.Calc = { isoDays, validISO, taipeiToday, priceOnOrBefore, dividendsFor, lotMetrics, totals, ageMinutes,
                 filterItems, sortItems, parseLots };
 })(typeof window !== "undefined" ? window : globalThis);

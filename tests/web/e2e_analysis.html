@@ -37,6 +37,34 @@ async function until(fn, ms) { const end = Date.now() + (ms || 15000); while (Da
   }
   const passCode = first ? first.querySelector(".sym").textContent.match(/#\d+ (\S+)/)[1] : null;
 
+  /* ---- the list of EVERYTHING that passed: nobody should have to guess what was selected */
+  {
+    const Sx = w.eval("S"), A = w.Analysis || w.A;
+    const all = A.candidates(Sx.index, { scope: "all", term: "", ind: Sx.info, quotes: Sx.quotes, rules: Sx.rules });
+    t("scan list holds EVERY first-pass pass (same count as Analysis.candidates)", Sx.scan.list && Sx.scan.list.length === all.length, (Sx.scan.list || []).length + " vs " + all.length);
+    t("…and says how many passed", new RegExp("全市場共 " + all.length + " 檔通過").test($("scan-table").textContent), $("scan-table").textContent.slice(0, 60));
+    const types = () => [...d.querySelectorAll("#scantable tbody tr")].map((r) => r.children[3].textContent);
+    $("scan-scope").value = "ETF"; $("scan-scope").dispatchEvent(new w.Event("change", { bubbles: true }));
+    const etfRows = types();
+    t("scope filter applies live: only ETF rows (and no rescan needed)", etfRows.every((x) => x.startsWith("ETF")) && !Sx.scan.busy, etfRows.slice(0, 3));
+    t("…and the filtered count matches the data", etfRows.length === Math.min(300, all.filter((c) => c.it.k === "ETF").length), etfRows.length);
+    $("scan-scope").value = "all"; $("scan-scope").dispatchEvent(new w.Event("change", { bubbles: true }));
+    const th = () => d.querySelector('#scantable th[data-sort="rsi"]');
+    if (th()) {
+      th().click(); th().click();                                             // first click: high→low, second: low→high
+      const rsis = [...d.querySelectorAll("#scantable tbody tr")].map((r) => parseFloat(r.children[6].textContent)).filter((x) => !isNaN(x));
+      t("clicking a header sorts the table (RSI ascending after two clicks)", rsis.length > 1 && rsis.every((x, i) => i === 0 || rsis[i - 1] <= x), rsis.slice(0, 5));
+    }
+    const some = all.length ? all[0].it : null;
+    if (some) {
+      $("scan-term").value = some.c; $("scan-term").dispatchEvent(new w.Event("input", { bubbles: true }));
+      const rows = [...d.querySelectorAll("#scantable tbody tr")];
+      t("typing a code filters the list as you type", rows.length >= 1 && rows.every((r) => r.children[1].textContent.toLowerCase().startsWith(some.c.toLowerCase())), rows.length);
+      $("scan-term").value = ""; $("scan-term").dispatchEvent(new w.Event("input", { bubbles: true }));
+    }
+    t("leaving the scan view and coming back does not rescan needlessly (result kept)", (() => { const o = Sx.scan.out; $("tab-market").click(); $("tab-scan").click(); return Sx.scan.out === o; })());
+  }
+
   /* a keyword that matches nothing says so BY NAME, and invents no picks */
   $("scan-term").value = "zzzz-no-such"; $("scan-run").click();
   await until(() => /找不到代號或名稱符合/.test($("detail").textContent));
@@ -44,13 +72,17 @@ async function until(fn, ms) { const end = Date.now() + (ms || 15000); while (Da
     d.querySelectorAll(".card").length === 0 && /找不到代號或名稱符合「zzzz-no-such」/.test($("detail").textContent), $("detail").textContent.slice(0, 120));
 
   /* ---- the reported problem: "typed a code, scanned, no result" must say WHY.
-   * The numbers of one real symbol are replaced with ones we control, so the
-   * expected text does not depend on today's market. */
+   * One symbol's numbers are replaced with ones we control, so the expected
+   * text does not depend on today's market. The scan reads S.info (built from
+   * the all-market closes), so that is what we override. */
   const S0 = w.eval("S"), probe = "2330";
-  const keep = [S0.ind[probe], S0.quotes[probe]];
+  const keep = [S0.info[probe], S0.quotes[probe]];
   const scanDone = () => until(() => !S0.scan.busy && S0.scan.out, 60000);
-  const hot = { close: 100, ma5: 101, ma20: 98, ma60: 90, rsi: 69.5, hist: 0.5, vol_ratio: 1, rows: 480, avg_lots: 2000 };
-  S0.ind[probe] = Object.assign({}, hot); S0.quotes[probe] = { last: 100, vol: 3, live: true };
+  const mkInfo = (state, extra) => Object.assign({ state: Object.assign({ close: 100, ma20: 98, ma20_5: 96, ma60: 90, rsi: 55, hist: 0.5 }, state),
+    close: 100, ma5: 101, ma20: 98, vol_ratio: 1, n: 480, avg_lots: 2000 }, extra);
+  t("scan data came from closes.json through Analysis.infoFromCloses (S.info exists, MA is not read from the server)",
+    !!S0.info && !!S0.info[probe] && S0.info[probe].state !== undefined && !("ma20" in (S0.ind[probe] || {})));
+  S0.info[probe] = mkInfo({ rsi: 69.5 }); S0.quotes[probe] = { last: 100, vol: 3, live: true };
   $("scan-scope").value = "all"; $("scan-term").value = probe; $("scan-run").click(); await scanDone();
   const tx1 = $("detail").textContent;
   t("typed code that fails: says it did not make the list", /你輸入的 1 檔標的今天都沒有入選/.test(tx1), tx1.slice(0, 160));
@@ -60,18 +92,37 @@ async function until(fn, ms) { const end = Date.now() + (ms || 15000); while (Da
   t("…offers 看分析 for that code", !!d.querySelector('ul.why [data-go="ta"][data-code="' + probe + '"]'));
   t("…and says the analysis tab has no such limits", /分析」分頁不受它們限制/.test(tx1));
 
+  /* ---- adjustable rules: wired end to end, remembered, and honest about over-fitting */
+  t("rules panel starts at the defaults", /進階條件：預設/.test($("detail").textContent) && !/過度配適/.test($("detail").textContent));
+  const setRule = (key, v) => { const el = d.getElementById("rule-" + key); el.value = v; el.dispatchEvent(new w.Event("change", { bubbles: true })); };
+  setRule("rsiMax", "72");
+  t("changing a limit updates the rules the scan uses", S0.rules.rsiMax === 72 && S0.rules.rsiMin === 40, JSON.stringify(S0.rules));
+  t("…and remembers them across a reload (localStorage)", JSON.parse(localStorage.getItem("stockerickl.rules.v1")).rsiMax === 72);
+  t("…and warns, in plain words, that tuning while watching results is over-fitting", /進階條件：已調整/.test($("detail").textContent) && /過度配適/.test($("detail").textContent));
+  t("…and the typed text and scope survive the repaint", d.getElementById("scan-term").value === probe);
+  $("scan-run").click(); await scanDone();
+  t("a looser RSI ceiling lets RSI 69.5 through the first pass (the reason is gone)", !/RSI 69\.50 高於上限/.test($("detail").textContent), $("detail").textContent.slice(0, 200));
+  setRule("rsiMax", "abc");
+  t("junk in a limit falls back to the default instead of breaking the scan", S0.rules.rsiMax === 68, S0.rules.rsiMax);
+  /* both fields typed, THEN one change event: sequential edits would each be normalised on their own */
+  d.getElementById("rule-rsiMin").value = "80"; d.getElementById("rule-rsiMax").value = "30";
+  d.getElementById("rule-rsiMax").dispatchEvent(new w.Event("change", { bubbles: true }));
+  t("a reversed RSI band is swapped, not silently empty", S0.rules.rsiMin === 30 && S0.rules.rsiMax === 80, JSON.stringify(S0.rules));
+  d.getElementById("rules-reset").click();
+  t("reset restores the defaults and clears the warning", S0.rules.rsiMin === 40 && S0.rules.rsiMax === 68 && S0.rules.maxExt === 6 && S0.rules.minLots === 500 && !/過度配適/.test($("detail").textContent));
+
   /* the volume rule: a liquid name must not be rejected because TODAY's volume is still tiny */
-  S0.ind[probe] = Object.assign({}, hot, { rsi: 55 });                    // only the odd volume (3 lots today) is left
+  S0.info[probe] = mkInfo({ rsi: 55 });                                    // only the odd volume (3 lots today) is left
   $("scan-run").click(); await scanDone();
   const tx2 = $("detail").textContent;
   t("liquid name with tiny volume today is NOT rejected for volume", !/流動性不足|今日累積成交量/.test(tx2), tx2.slice(0, 200));
-  delete S0.ind[probe].avg_lots;                                           // an older indicators.json
+  delete S0.info[probe].avg_lots;                                          // an older indicators.json
   $("scan-run").click(); await scanDone();
   t("without avg_lots it falls back to today's volume and says so", /今日累積成交量 3 張/.test($("detail").textContent), $("detail").textContent.slice(0, 200));
 
   /* a mixed input: one passes, one does not -> cards AND the reason for the other */
   if (passCode) {
-    S0.ind[probe] = Object.assign({}, hot);
+    S0.info[probe] = mkInfo({ rsi: 69.5 });
     $("scan-term").value = passCode + " " + probe; $("scan-run").click(); await scanDone();
     const txm = $("detail").textContent;
     const cardCodes = [...d.querySelectorAll(".card .sym")].map((e) => (e.textContent.match(/#\d+ (\S+)/) || [])[1]);
@@ -82,8 +133,26 @@ async function until(fn, ms) { const end = Date.now() + (ms || 15000); while (Da
     t("看分析 from the explanation opens that code", $("tab-ta").getAttribute("aria-pressed") === "true" && $("v-code").value === probe);
     $("tab-scan").click();
   } else log.push("no passing card available for the mixed-input check");
-  S0.ind[probe] = keep[0]; S0.quotes[probe] = keep[1];
+  S0.info[probe] = keep[0]; S0.quotes[probe] = keep[1];
   $("scan-term").value = "";
+
+  /* ---- market-wide validation of the current rules, on screen */
+  t("validation panel offers a run button and starts empty", !!$("val-run") && !$("valtable"));
+  $("val-run").click();
+  await until(() => $("valtable"), 90000);
+  t("validation shows a three-row table (all / earlier / later)", d.querySelectorAll("#valtable tbody tr").length === 3, d.querySelectorAll("#valtable tbody tr").length);
+  const verdictEl = $("valverdict");
+  t("…and one plain-language verdict", !!verdictEl && verdictEl.textContent.length > 25 && ["better", "worse", "same", "none"].includes(verdictEl.dataset.tone), verdictEl && verdictEl.textContent);
+  const kinds = Object.fromEntries(S0.index.map((i) => [i.c, i.k]));
+  const direct = await w.Analysis.validateMarket(S0.closes, kinds, S0.rules, {});
+  const firstRow = d.querySelector("#valtable tbody tr").textContent;
+  t("…whose first row is exactly what Analysis.validateMarket returns",
+    firstRow.includes(direct.all.setup.n.toLocaleString()) && firstRow.includes(direct.all.base.n.toLocaleString()), firstRow + " vs " + direct.all.setup.n + "/" + direct.all.base.n);
+  t("…and states how it should be read (baseline, survivorship, tuning)", /基準/.test($("detail").textContent) && /已下市/.test($("detail").textContent) && /樣本外/.test($("detail").textContent));
+  setRule("maxExt", "10");
+  t("changing a limit throws away the old validation (a result for other rules must not stay on screen)", !d.getElementById("valtable"));
+  d.getElementById("rules-reset").click();
+  log.push("validation on screen: " + firstRow.replace(/\s+/g, " ").slice(0, 120));
 
   /* analysis from a card */
   $("scan-term").value = ""; $("scan-run").click();
@@ -93,7 +162,87 @@ async function until(fn, ms) { const end = Date.now() + (ms || 15000); while (Da
   const verdict = await until(() => d.querySelector(".verdict"));
   t("analysis view paints a verdict", !!verdict, $("detail").textContent.slice(0, 120));
   t("analysis is for the clicked symbol", $("v-code") && $("v-code").value === code, $("v-code") && $("v-code").value + " vs " + code);
-  t("two charts (daily + weekly)", d.querySelectorAll("#detail svg").length === 2, d.querySelectorAll("#detail svg").length);
+  /* ---- the big chart below the panels */
+  {
+    const dock = d.getElementById("chartdock"), Sx = w.eval("S"), CHx = w.eval("CH"), A = w.Analysis;
+    t("chart lives in its own panel BELOW the detail panel, not inside it", dock && !dock.hidden && !$("detail").contains(dock) &&
+      (dock.compareDocumentPosition($("detail")) & w.Node.DOCUMENT_POSITION_PRECEDING) !== 0);
+    t("chart is wide: the SVG fills the panel width (>= 600px)", d.getElementById("ch-svg") && d.getElementById("ch-svg").getBoundingClientRect().width >= 600, d.getElementById("ch-svg") && d.getElementById("ch-svg").getBoundingClientRect().width);
+    t("old data without open/high/low says so and still draws", /還沒有開高低量/.test(dock.textContent) && !!d.getElementById("ch-svg"));
+    /* give this symbol real OHLCV (deterministic) and repaint */
+    const h0 = Sx.hist[code], n0 = h0.p.length;
+    const syn = { d: h0.d, p: h0.p, o: h0.p.map((x, i) => +(x * (i % 2 ? 0.99 : 1.01)).toFixed(2)),
+      h: h0.p.map((x) => +(x * 1.03).toFixed(2)), l: h0.p.map((x) => +(x * 0.97).toFixed(2)), v: h0.p.map((_, i) => 1000 + i) };
+    Sx.hist[code] = syn; w.eval("paintTA()");
+    t("with OHLCV there is no 'missing' notice", !/還沒有開高低量/.test(dock.textContent));
+    const wrap = d.getElementById("ch-wrap"), svg = () => d.getElementById("ch-svg");
+    const xAt = (i) => { const r = svg().getBoundingClientRect(), G = CHx.geo; return r.left + G.xc(i) * (r.width / G.W); };
+    const ev = (type, i, extra) => wrap.dispatchEvent(new w.PointerEvent(type, Object.assign({ bubbles: true, clientX: xAt(i), clientY: svg().getBoundingClientRect().top + 50, button: 0, pointerId: 1 }, extra || {})));
+    const closes = syn.p, i0 = CHx.view.a + 10;
+    ev("pointermove", i0);
+    const info = () => d.getElementById("ch-info").textContent.replace(/\s+/g, " ");
+    const fx = (x) => Number(x).toFixed(2);
+    t("hovering a day shows ITS date and open/high/low/close", info().includes(syn.d[i0]) && info().includes("開" + fx(syn.o[i0])) && info().includes("高" + fx(syn.h[i0])) &&
+      info().includes("低" + fx(syn.l[i0])) && info().includes("收" + fx(syn.p[i0])), info().slice(0, 120));
+    t("…and that day's volume in lots", info().includes(Math.round(syn.v[i0]).toLocaleString("en-US")), info().slice(0, 160));
+    const rsiRef = A.rsi(closes, 14)[i0], macdRef = A.macd(closes);
+    t("…and RSI equal to Analysis.rsi on the closes", info().includes("RSI" + rsiRef.toFixed(1)), info().match(/RSI\S+/) + " vs " + rsiRef.toFixed(1));
+    t("…and MACD DIF/DEA/柱 equal to Analysis.macd", info().includes("DIF" + macdRef.dif[i0].toFixed(3)) && info().includes("DEA" + macdRef.dea[i0].toFixed(3)) && info().includes("柱" + macdRef.hist[i0].toFixed(3)));
+    t("…and the change vs the previous close", info().includes((closes[i0] - closes[i0 - 1] >= 0 ? "+" : "") + (closes[i0] - closes[i0 - 1]).toFixed(2)), info().match(/漲跌\S+/));
+    const ma20 = A.sma(closes, 20)[i0];
+    t("…and MA20", info().includes("MA20" + ma20.toFixed(2)));
+    const x1 = d.getElementById("ch-x");
+    t("a crosshair line sits on that day", x1.getAttribute("visibility") === "visible" && Math.abs(+x1.getAttribute("x1") - CHx.geo.xc(i0)) < 0.6);
+    /* click pins; moving away no longer changes it; click again releases */
+    ev("pointerdown", i0); ev("pointerup", i0);
+    ev("pointermove", i0 + 5);
+    t("a click pins that day (hovering elsewhere does not change it)", CHx.pinned && info().includes(syn.d[i0]) && /已固定/.test(info()));
+    ev("pointerdown", i0); ev("pointerup", i0); ev("pointermove", i0 + 5);
+    t("clicking the pinned day again releases it", !CHx.pinned && info().includes(syn.d[i0 + 5]));
+    /* zoom with the wheel, keeping the day under the pointer in place */
+    const wv = () => CHx.view.b - CHx.view.a, before = wv(), midIdx = Math.floor((CHx.view.a + CHx.view.b) / 2);
+    const wheel = (dy, i) => wrap.dispatchEvent(new w.WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: dy, clientX: xAt(i), clientY: svg().getBoundingClientRect().top + 50 }));
+    wheel(-100, midIdx); await sleep(80);
+    t("wheel up zooms in (fewer bars)", wv() < before, before + " -> " + wv());
+    t("…the day under the pointer is still on screen", CHx.view.a <= midIdx && midIdx < CHx.view.b);
+    for (let k = 0; k < 30; k++) wheel(-100, midIdx);
+    await sleep(80);
+    t("zooming in stops at a minimum (20 bars)", wv() === 20, wv());
+    for (let k = 0; k < 60; k++) wheel(100, midIdx);
+    await sleep(80);
+    t("zooming out stops at all the data", wv() === syn.d.length && CHx.view.a === 0, wv() + " vs " + syn.d.length);
+    /* drag to pan */
+    wrap.dispatchEvent(new w.WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -100, clientX: xAt(CHx.view.a + 5) })); await sleep(80);
+    for (let k = 0; k < 6; k++) wheel(-100, CHx.view.a + 5);
+    await sleep(80);
+    const a1 = CHx.view.a;
+    ev("pointerdown", CHx.view.a + 20); ev("pointermove", CHx.view.a + 20, { clientX: xAt(CHx.view.a + 20) + 8 * CHx.geo.step * (svg().getBoundingClientRect().width / CHx.geo.W) }); ev("pointerup", CHx.view.a + 20);
+    await sleep(80);
+    t("dragging right pans back in time (view moves left, same width)", CHx.view.a < a1 || a1 === 0, a1 + " -> " + CHx.view.a);
+    t("…and never past the data", CHx.view.a >= 0 && CHx.view.b <= syn.d.length);
+    /* range buttons, reset, weekly */
+    dock.querySelector('[data-ch-range="63"]').click(); await sleep(80);
+    t("3-month button shows 63 days", wv() === 63 && CHx.view.b === syn.d.length, wv());
+    dock.querySelector("[data-ch-reset]").click(); await sleep(80);
+    t("reset returns to the default 150 days", wv() === 150, wv());
+    dock.querySelector('[data-ch-tf="W"]').click(); await sleep(80);
+    const wk = A.weeklyBars(A.bars(A.clean(syn)).bars);
+    t("weekly: bars are the Monday-based aggregation of the daily bars", CHx.data.bs.length === wk.length && wk.length < syn.d.length / 3, CHx.data.bs.length + " vs " + wk.length);
+    const lastW = wk[wk.length - 1];
+    CHx.cursor = wk.length - 1; CHx.pinned = false; w.eval("updateCursor()");
+    t("…its last week's high is the max high of that week and its volume the sum", Math.abs(lastW.h - Math.max(...syn.h.slice(-5))) < 0.011 || lastW.h >= Math.max(...syn.h.slice(-3)), lastW.h);
+    dock.querySelector('[data-ch-tf="D"]').click(); await sleep(80);
+    /* keyboard */
+    const wrap2 = d.getElementById("ch-wrap"); wrap2.focus(); const cur0 = CHx.cursor;
+    wrap2.dispatchEvent(new w.KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true }));
+    t("← moves the cursor one day back and pins it", CHx.cursor === cur0 - 1 && CHx.pinned);
+    /* leaving the view hides the chart */
+    $("tab-scan").click();
+    t("the chart is hidden outside the analysis view", dock.hidden === true);
+    $("tab-ta").click(); await sleep(100);
+    t("…and comes back on return", dock.hidden === false && !!d.getElementById("ch-svg"));
+    Sx.hist[code] = h0; w.eval("paintTA()");
+  }
   t("step table present", d.querySelectorAll("#detail tbody tr").length >= 6, d.querySelectorAll("#detail tbody tr").length);
   t("verdict is one of three", ["買進", "持有", "賣出"].includes(verdict.textContent.trim()));
   t("no NaN / undefined in analysis text", !/NaN|undefined|Infinity/.test($("detail").textContent), $("detail").textContent.match(/.{20}(NaN|undefined|Infinity).{20}/));

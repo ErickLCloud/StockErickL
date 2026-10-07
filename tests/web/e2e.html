@@ -4,6 +4,7 @@
 <body style="margin:0">
 <pre id="out">running…</pre>
 <script src="../../docs/calc.js"></script>
+<script src="../../docs/analysis.js"></script>
 <script>
 "use strict";
 /* End-to-end check of the REAL page, in a headless browser, against the REAL
@@ -187,17 +188,28 @@ async function load(url) {
     const tr = await until(() => D.querySelector("#lottable tbody tr"));
     t("a valid lot is added", !!tr);
     const last = Q["0050"].last, pnl = (last - 168.5) * 1000;
-    const cells = [...tr.children].map((c) => c.textContent.trim());
+    await until(() => tr.children[7] && tr.children[7].textContent.trim() !== "—", 15000);   // dividends arrive with the symbol's history
+    const cells = [...D.querySelector("#lottable tbody tr").children].map((c) => c.textContent.trim());
     t("P&L cell equals (last - cost) x shares", cells[6] === (pnl > 0 ? "+" : "") + money(pnl), cells[6] + " vs " + money(pnl));
-    t("return % cell matches the hand formula", cells[7] === (((last / 168.5 - 1) * 100) > 0 ? "+" : "") + n2((last / 168.5 - 1) * 100), cells[7]);
-    t("holding days = calendar days to today", cells[8] === String(C.isoDays("2024-10-08", today)), cells[8]);
-    t("annualised shown for a >30-day lot", cells[9] !== "—", cells[9]);
-    t("total row equals the single lot", $("t-pnl").textContent === cells[6], $("t-pnl").textContent);
+    /* dividends come from the symbol's history file, summed here independently of the page */
+    const hd0050 = h50, divRows = (hd0050.div || []).filter((x) => x[0] > "2024-10-08" && x[0] <= today);
+    const divPs = divRows.reduce((a, x) => a + x[1], 0), divTotal = divPs * 1000;
+    t("dividend cell = ex-dividend rows after the buy date x shares (independent sum from the history file)",
+      cells[7].replace(/[+,†]/g, "") === String(Math.round(divTotal)), cells[7] + " vs " + Math.round(divTotal) + " from " + JSON.stringify(divRows));
+    t("0050 has dividends in the window, so this check is not vacuous", divRows.length >= 2 && divTotal > 0, JSON.stringify(divRows));
+    const tot0 = pnl + divTotal;
+    t("total P&L cell = price P&L + dividends", cells[8].replace(/[+,‡]/g, "") === String(Math.round(tot0)), cells[8] + " vs " + Math.round(tot0));
+    const totRet = (tot0 / (168.5 * 1000)) * 100;
+    t("total return % cell matches the hand formula", cells[9].replace(/[‡]/g, "") === (totRet > 0 ? "+" : "") + n2(totRet), cells[9] + " vs " + n2(totRet));
+    t("holding days = calendar days to today", cells[10] === String(C.isoDays("2024-10-08", today)), cells[10]);
+    t("annualised shown for a >30-day lot", cells[11] !== "—", cells[11]);
+    t("price-only total row equals the single lot", $("t-pnl").textContent === cells[6], $("t-pnl").textContent);
+    t("total row's total P&L equals the single lot's", $("t-total").textContent === cells[8].replace("‡", ""), $("t-total").textContent + " vs " + cells[8]);
 
     fill("2330", C.taipeiToday(), 10, 2000);
     await until(() => D.querySelectorAll("#lottable tbody tr").length === 2);
     const tr2 = D.querySelectorAll("#lottable tbody tr")[1];
-    t("a lot bought today has NO annualised figure", tr2.children[9].textContent.trim() === "—", tr2.children[9].textContent);
+    t("a lot bought today has NO annualised figure", tr2.children[11].textContent.trim() === "—", tr2.children[11].textContent);
     const p2 = (Q["2330"].last - 2000) * 10;
     t("total = sum of both lots", $("t-pnl").textContent === (pnl + p2 > 0 ? "+" : "") + money(pnl + p2), $("t-pnl").textContent + " vs " + money(pnl + p2));
     t("two lots persisted", JSON.parse(localStorage.getItem("stockerickl.lots.v1")).length === 2);
@@ -230,13 +242,28 @@ async function load(url) {
       type($("q"), "0050"); rows()[0].click();
       const svg = await until(() => $("detail").querySelector("svg"), 8000);
       t("price chart renders for 0050", !!svg);
-      t("MA20 shown from indicators.json", $("detail").textContent.includes(n2(ind.items["0050"].ma20)), "ma20=" + ind.items["0050"].ma20);
-      const stockCode = Object.keys(ind.items).find((c) => !c.startsWith("00") && ind.items[c].ma240 != null);
+      /* The page no longer reads MA / RSI / MACD from the server. What is on screen must equal the SAME function applied to
+       * the symbol's history file, AND equal what the scan's first pass reads (built from closes.json). */
+      const AN = window.Analysis, gap0 = (ind.items["0050"] || {}).gap;
+      const exp = AN.snapshot(AN.clean(h50, gap0));
+      t("MA20 on screen = Analysis.snapshot of the history file", $("detail").textContent.includes(n2(exp.ma20)), "ma20=" + exp.ma20);
+      t("RSI, MACD histogram and MA240 on screen match as well",
+        [exp.rsi, exp.hist, exp.ma240].every((v) => v == null || $("detail").textContent.includes(n2(v))), JSON.stringify([exp.rsi, exp.hist, exp.ma240]));
+      const clz = await fetch("../../docs/data/closes.json", nc).then((r) => r.json());
+      const viaCloses = AN.infoFromCloses(clz, ind.items)["0050"];
+      t("one implementation, two data files, the SAME numbers (history file vs closes.json)",
+        viaCloses.ma20 === exp.ma20 && viaCloses.ma60 === exp.ma60 && viaCloses.rsi === exp.rsi && viaCloses.hist === exp.hist && viaCloses.ma240 === exp.ma240,
+        JSON.stringify([viaCloses.ma20, exp.ma20, viaCloses.rsi, exp.rsi]));
+      const stockCode = Object.keys(ind.items).find((c) => !c.startsWith("00") && (ind.items[c].rows || 0) >= 260 && !ind.items[c].gap);
       if (stockCode) {
         type($("q"), stockCode); rows()[0].click();
         await until(() => $("detail").textContent.includes(stockCode));
-        t("an ordinary stock also has indicators and a chart (" + stockCode + ")",
-          $("detail").textContent.includes(n2(ind.items[stockCode].ma20)) && !!(await until(() => $("detail").querySelector("svg"), 8000)));
+        const hs = await fetch("../../docs/data/history/" + stockCode + ".json", nc).then((r) => r.json());
+        const es = AN.snapshot(AN.clean(hs, null));
+        /* the panel paints "—" first and fills the numbers when the history arrives: wait for them, do not race the page */
+        const painted = await until(() => $("detail").textContent.includes(n2(es.ma20)) && $("detail").textContent.includes(n2(es.ma60)) && $("detail").querySelector("svg"), 10000);
+        t("an ordinary stock also has indicators and a chart (" + stockCode + ")", !!painted, "wanted ma20=" + n2(es.ma20) + " ma60=" + n2(es.ma60));
+        t("KD and volume ratio still come from the server (they need high/low/volume)", ind.items[stockCode].k != null && $("detail").textContent.includes(n2(ind.items[stockCode].k)));
       }
       const gapCode = Object.keys(ind.items).find((c) => ind.items[c].gap);
       if (gapCode) {

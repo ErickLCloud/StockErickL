@@ -76,13 +76,82 @@
   /* Cut a history at a detected gap (split / data break) and drop bad closes. */
   function clean(h, gap) {
     if (!h || !Array.isArray(h.d) || !Array.isArray(h.p)) return null;
-    const d = [], p = [];
+    const d = [], p = [], extra = {};
+    const keys = ["o", "h", "l", "v"].filter((k) => Array.isArray(h[k]) && h[k].length === h.d.length);
+    keys.forEach((k) => { extra[k] = []; });
     for (let i = 0; i < h.d.length; i++) {
       if (gap && gap.date && h.d[i] < gap.date) continue;
       if (!(h.p[i] > 0)) continue;
       d.push(h.d[i]); p.push(Number(h.p[i]));
+      keys.forEach((k) => extra[k].push(h[k][i] == null ? null : Number(h[k][i])));
     }
-    return { d, p };
+    return Object.assign({ d, p }, extra);
+  }
+
+  /* Candles from a clean() result: one {d,o,h,l,c,v} per day. A day with no
+   * open/high/low (or a high/low that does not contain the close) is repaired
+   * from the close, and `real` says whether the series had OHLC at all. */
+  function bars(c) {
+    const real = !!(c && c.o && c.h && c.l);
+    const out = [];
+    for (let i = 0; i < c.p.length; i++) {
+      const cl = c.p[i];
+      let o = real && c.o[i] > 0 ? c.o[i] : cl;
+      let hi = real && c.h[i] > 0 ? c.h[i] : cl, lo = real && c.l[i] > 0 ? c.l[i] : cl;
+      hi = Math.max(hi, o, cl); lo = Math.min(lo, o, cl);
+      out.push({ d: c.d[i], o, h: hi, l: lo, c: cl, v: c.v && c.v[i] != null ? c.v[i] : null });
+    }
+    return { bars: out, real };
+  }
+
+  /* Daily bars -> weekly bars (Monday-based, same grouping as weekly()). */
+  function weeklyBars(bs) {
+    const out = [];
+    let key = null;
+    for (const b of bs) {
+      const [y, m, dd] = b.d.split("-").map(Number);
+      const t = Date.UTC(y, m - 1, dd), dow = (new Date(t).getUTCDay() + 6) % 7, k = t - dow * 86400000;
+      if (k !== key) { key = k; out.push({ d: b.d, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v }); }
+      else {
+        const w = out[out.length - 1];
+        w.d = b.d; w.c = b.c; w.h = Math.max(w.h, b.h); w.l = Math.min(w.l, b.l);
+        w.v = w.v == null && b.v == null ? null : (w.v || 0) + (b.v || 0);
+      }
+    }
+    return out;
+  }
+
+  /* ------------------------------------------------- the interactive chart's maths
+   * Kept here (not in the page) so it is unit-tested without a browser.
+   * A view is {a, b}: bars a .. b-1 are on screen. */
+  const MIN_BARS = 20;
+  function clampView(v, n) {
+    const min = Math.min(MIN_BARS, n);
+    let w = Math.round(v.b - v.a);
+    w = Math.max(min, Math.min(n, w));
+    let a = Math.round(v.a);
+    a = Math.max(0, Math.min(n - w, a));
+    return { a, b: a + w };
+  }
+  /* factor < 1 zooms in. `focus` (0..1) is the point of the window that stays put. */
+  function zoomView(v, n, focus, factor) {
+    const w = v.b - v.a, nw = Math.max(Math.min(MIN_BARS, n), Math.min(n, Math.round(w * factor)));
+    const anchor = v.a + focus * w;
+    return clampView({ a: anchor - focus * nw, b: anchor - focus * nw + nw }, n);
+  }
+  function panView(v, n, delta) { return clampView({ a: v.a + delta, b: v.b + delta }, n); }
+  function lastView(n, count) { return clampView({ a: n - count, b: n }, n); }
+
+  /* Everything to show for bar i: the day's prices, change vs the previous
+   * close, volume, and the indicators at that day from series(). */
+  function barInfo(bs, ser, i) {
+    const b = bs[i];
+    if (!b) return null;
+    const prev = i > 0 ? bs[i - 1].c : null, g = (a) => (a && Number.isFinite(a[i]) ? a[i] : null);
+    return { i, d: b.d, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v,
+      chg: prev == null ? null : b.c - prev, chgPct: prev == null ? null : (b.c / prev - 1) * 100,
+      ma5: g(ser.ma5), ma20: g(ser.ma20), ma60: g(ser.ma60), rsi: g(ser.rsi),
+      dif: g(ser.macd.dif), dea: g(ser.macd.dea), hist: g(ser.macd.hist) };
   }
 
   /* Daily -> weekly closes (week starts Monday; last close of each week). */
@@ -161,8 +230,7 @@
   function analyze(h) {
     const p = h.p, n = p.length, last = p[n - 1];
     if (n < 30) return null;
-    const ma5 = sma(p, 5), ma20 = sma(p, 20), ma60 = sma(p, 60);
-    const r = rsi(p, 14), m = macd(p);
+    const sr = series(p), ma5 = sr.ma5, ma20 = sr.ma20, ma60 = sr.ma60, r = sr.rsi, m = sr.macd;
     const lv = levels(p), tr = trend(p, 60);
     const steps = [];
     const add = (tf, name, score, text) => steps.push({ tf, name, score, text });
@@ -243,36 +311,219 @@
    * stop = 2.5 x 20-day volatility below entry, clamped to 3%..8%; target = 2R. */
   function riskPct(p, end) { return clamp(2.5 * vol(p, 20, end), 0.03, 0.08); }
 
-  /* Trend pullback setup: uptrend, price near the 20-day line, momentum not stretched. */
-  function setupAt(a, i) {
-    const { ma20, ma60, rsi: r, macd: m } = a;
-    if (i < 61 || ma60[i] == null || ma20[i - 5] == null || r[i] == null) return false;
-    const c = a.p[i];
-    return c > ma20[i] && ma20[i] > ma60[i] && ma20[i] > ma20[i - 5] &&
-      c <= ma20[i] * 1.06 && r[i] >= 40 && r[i] <= 68 && m.hist[i] > 0;
+  /* ------------------------------------------------ the setup: ONE definition
+   *
+   * "Trend pullback": an uptrend whose 20-day line is still rising, price above
+   * it but not stretched, momentum healthy.
+   *
+   * Everything that decides whether a symbol qualifies is in SETUP_CHECKS below.
+   * The scan's first pass, its second pass, the historical replay, the
+   * market-wide validation and the explanation shown to the user all read this
+   * one list, and every number they feed it comes from series() on the same
+   * closes.
+   *
+   * Why it is one list: the first pass used to take its numbers from a Python
+   * build and skip the "20-day line rising" rule, while the second pass
+   * recomputed in the browser and applied it. So the first pass kept symbols the
+   * second pass was bound to reject, and they used up the 30 slots it checks.
+   * The user-adjustable limits live in `rules`; the structure does not. */
+  const RULES_DEFAULT = Object.freeze({ rsiMin: 40, rsiMax: 68, maxExt: 6, minLots: 500 });
+
+  /* Sanitise user input into usable rules: junk falls back to the default,
+   * values are clamped to a sane range, and a reversed RSI band is swapped. */
+  function normRules(r) {
+    r = r || {};
+    const num = (v, d, lo, hi) => {
+      if (v === null || v === undefined || v === "") return d;
+      v = Number(v);
+      return fin(v) ? clamp(v, lo, hi) : d;
+    };
+    let rsiMin = num(r.rsiMin, RULES_DEFAULT.rsiMin, 0, 100), rsiMax = num(r.rsiMax, RULES_DEFAULT.rsiMax, 0, 100);
+    if (rsiMin > rsiMax) [rsiMin, rsiMax] = [rsiMax, rsiMin];
+    return { rsiMin, rsiMax, maxExt: num(r.maxExt, RULES_DEFAULT.maxExt, 0, 30), minLots: num(r.minLots, RULES_DEFAULT.minLots, 0, 1e7) };
+  }
+  const isDefaultRules = (r) => { const n = normRules(r); return Object.keys(RULES_DEFAULT).every((k) => n[k] === RULES_DEFAULT[k]); };
+
+  /* Each check: does the state pass, and if not, what to tell the user. Order matters:
+   * the first failing check is the one reported. */
+  const SETUP_CHECKS = [
+    { ok: (s) => s.close > s.ma20,
+      why: (s) => "收盤 " + f2(s.close) + " 在 20 日線 " + f2(s.ma20) + " 之下（不是多頭回檔）" },
+    { ok: (s) => s.ma20 > s.ma60,
+      why: (s) => "20 日線 " + f2(s.ma20) + " 沒有高於 60 日線 " + f2(s.ma60) + "（中期趨勢不是向上）" },
+    { ok: (s) => s.ma20 > s.ma20_5,
+      why: (s) => "20 日線 " + f2(s.ma20) + " 沒有比 5 個交易日前的 " + f2(s.ma20_5) + " 高（均線沒有上彎）" },
+    { ok: (s, r) => s.close <= s.ma20 * (1 + r.maxExt / 100),
+      why: (s, r) => "收盤高出 20 日線 " + f2((s.close / s.ma20 - 1) * 100) + "%，超過 " + r.maxExt + "%（太延伸，不追高）" },
+    { ok: (s, r) => s.rsi <= r.rsiMax,
+      why: (s, r) => "RSI " + f2(s.rsi) + " 高於上限 " + r.rsiMax + "（偏熱）" },
+    { ok: (s, r) => s.rsi >= r.rsiMin,
+      why: (s, r) => "RSI " + f2(s.rsi) + " 低於下限 " + r.rsiMin + "（偏弱）" },
+    { ok: (s) => s.hist > 0,
+      why: (s) => "MACD 柱 " + f2(s.hist) + " 不是正的（動能偏弱）" },
+  ];
+  const NO_STATE = "歷史不足，算不出 60 日線與 20 日線的斜率（至少需要 62 個交易日）";
+
+  /* Hot path (the validation calls this ~1M times): booleans only, no strings. `r` must already be normRules()'d. */
+  function setupPassN(s, r) {
+    if (!s) return false;
+    for (const c of SETUP_CHECKS) if (!c.ok(s, r)) return false;
+    return true;
+  }
+  /* null when the state qualifies, otherwise the first failing reason. */
+  function setupWhy(s, rules) {
+    if (!s) return NO_STATE;
+    const r = normRules(rules);
+    for (const c of SETUP_CHECKS) if (!c.ok(s, r)) return c.why(s, r);
+    return null;
+  }
+
+  /* The ONLY place the indicator arrays are made. The page and the scan both
+   * call this on the same closes; the server publishes no copy of them. */
+  function series(p) {
+    return { p, ma5: sma(p, 5), ma20: sma(p, 20), ma60: sma(p, 60), ma240: sma(p, 240), rsi: rsi(p, 14), macd: macd(p) };
+  }
+
+  /* The numbers the rules read, at bar i. null when there is not enough history. */
+  function stateAt(a, i) {
+    if (i < 61 || a.ma60[i] == null || a.ma20[i - 5] == null || a.rsi[i] == null) return null;
+    return { close: a.p[i], ma20: a.ma20[i], ma20_5: a.ma20[i - 5], ma60: a.ma60[i], rsi: a.rsi[i], hist: a.macd.hist[i] };
+  }
+
+  /* Trend pullback setup at bar i of series a. */
+  function setupAt(a, i, rules) { return setupPassN(stateAt(a, i), normRules(rules)); }
+
+  /* Latest values of one symbol, from ITS closes (h = {d, p}, already cleaned).
+   * Used by the first pass of the scan AND by the detail panel, so the two
+   * cannot show or judge different numbers. */
+  function snapshot(h) {
+    if (!h || !h.p || !h.p.length) return null;
+    const p = h.p, i = p.length - 1, a = series(p);
+    return { n: p.length, date: h.d[i], close: p[i], ma5: a.ma5[i], ma20: a.ma20[i], ma60: a.ma60[i],
+      ma240: a.ma240[i], rsi: a.rsi[i], hist: a.macd.hist[i], state: stateAt(a, i) };
+  }
+
+  /* closes.json -> {code: info} for the whole market. `server` is indicators.json:
+   * only what needs more than closes (KD, volume figures, gap, avg_lots). */
+  function infoFromCloses(cl, server) {
+    const out = {};
+    for (const code of Object.keys(cl.items)) {
+      const row = cl.items[code], d = [], p = [];
+      for (let k = 0; k < row.length; k++) if (row[k] > 0) { d.push(cl.d[k]); p.push(row[k]); }
+      const srv = (server && server[code]) || {};
+      const h = srv.gap ? clean({ d, p }, srv.gap) : { d, p };
+      out[code] = Object.assign({}, srv, snapshot(h));
+    }
+    return out;
+  }
+
+  /* One simulated trade: enter at the close of bar i, leave at the 2R target,
+   * the stop, or after 40 bars. Closes only (no intraday touch), costs in.
+   * null when the data ends before an outcome. */
+  function exitAt(p, i, cost) {
+    const risk = riskPct(p, i), stop = p[i] * (1 - risk), tgt = p[i] * (1 + 2 * risk);
+    let j = i + 1, out = null;
+    for (; j < p.length && j <= i + 40; j++) {
+      if (p[j] <= stop || p[j] >= tgt) { out = p[j]; break; }
+    }
+    if (out == null) { if (j >= p.length) return null; out = p[Math.min(j, p.length - 1)]; }  // timed out
+    return { ret: out / p[i] - 1 - cost, j, risk };
+  }
+
+  /* Every time this setup fired on THIS series and what followed (one position at a time). */
+  function setupTrades(p, kind, rules) {
+    const r = normRules(rules), a = series(p), cost = COST_RT(kind), out = [];
+    let i = 61;
+    while (i < p.length - 1) {
+      if (!setupPassN(stateAt(a, i), r)) { i++; continue; }
+      const x = exitAt(p, i, cost);
+      if (!x) break;
+      out.push({ i, ret: x.ret, risk: x.risk });
+      i = x.j + 1;
+    }
+    return out;
+  }
+
+  /* The yardstick: the same exit rules, entered on an ordinary day (every `step`
+   * bars, regardless of any setup). A setup that cannot beat this has no edge. */
+  function baselineTrades(p, kind, step) {
+    const cost = COST_RT(kind), out = [];
+    for (let i = 61; i < p.length - 1; i += step || 5) {
+      const x = exitAt(p, i, cost);
+      if (!x) break;
+      out.push({ i, ret: x.ret, risk: x.risk });
+    }
+    return out;
+  }
+
+  /* One honest sentence about a validateMarket() result. It judges the LATER
+   * part of the data, the fairer check, and says so when the earlier part
+   * disagrees. Under 30 signals on either side it refuses to judge at all, and
+   * a gap of less than half a percentage point counts as no difference. */
+  function validationVerdict(v) {
+    const L = v.late, E = v.early, MIN = 30;
+    const sp = (x) => (x >= 0 ? "+" : "") + (x * 100).toFixed(1) + "%";
+    const enough = (x) => x.setup.n >= MIN && x.base.n >= MIN;
+    const toneOf = (x) => { const d = (x.setup.avgRet - x.base.avgRet) * 100; return d >= 0.5 ? "better" : d <= -0.5 ? "worse" : "same"; };
+    if (!enough(L))
+      return { tone: "none", text: "較新的後段訊號太少（這組條件 " + L.setup.n + " 次、基準 " + L.base.n + " 次），樣本不足，無法判斷有沒有優勢。" };
+    const tone = toneOf(L), d = (L.setup.avgRet - L.base.avgRet) * 100;
+    let text = "較新的後段：這組條件每次平均 " + sp(L.setup.avgRet) + "（已扣費），任意日進場為 " + sp(L.base.avgRet) +
+      "，差 " + (d >= 0 ? "+" : "") + d.toFixed(1) + " 個百分點，" +
+      (tone === "better" ? "優於基準。" : tone === "worse" ? "劣於基準。" : "與基準沒有明顯差別。");
+    if (enough(E) && toneOf(E) !== tone)
+      text += " 較舊的前段結論是「" + ({ better: "優於", worse: "劣於", same: "相近於" })[toneOf(E)] + "基準」，和後段不同，表示這個結果不穩定。";
+    return { tone, text };
   }
 
   /* How this same setup played out earlier on THIS stock: enter at that day's
    * close, exit at stop / 2R target / 40 bars. Close-only, costs included. */
-  function setupStats(p, kind) {
-    const a = { p, ma20: sma(p, 20), ma60: sma(p, 60), rsi: rsi(p, 14), macd: macd(p) };
-    let n = 0, wins = 0, sum = 0, i = 61;
-    const cost = COST_RT(kind);
-    while (i < p.length - 1) {
-      if (!setupAt(a, i)) { i++; continue; }
-      const risk = riskPct(p, i), stop = p[i] * (1 - risk), tgt = p[i] * (1 + 2 * risk);
-      let j = i + 1, out = null;
-      for (; j < p.length && j <= i + 40; j++) {
-        if (p[j] <= stop || p[j] >= tgt) { out = p[j]; break; }
-      }
-      if (out == null) { if (j >= p.length) break; out = p[Math.min(j, p.length - 1)]; }  // timed out
-      const ret = out / p[i] - 1 - cost;
-      n++; sum += ret; if (ret > 0) wins++;
-      i = j + 1;
-    }
+  function setupStats(p, kind, rules) {
+    const t = setupTrades(p, kind, rules);
+    let wins = 0, sum = 0;
+    for (const x of t) { sum += x.ret; if (x.ret > 0) wins++; }
+    const n = t.length;
     return { n, wins, winRate: n ? wins / n : null, avgRet: n ? sum / n : null,
       /* shrunk toward 50% so 2 wins out of 2 does not rank as a sure thing */
       shrunk: (wins + 2) / (n + 4) };
+  }
+
+  /* Replay the setup over EVERY symbol's whole history and set it beside the
+   * baseline, split by time. cl = closes.json, kinds = {code: "ETF"|"STOCK"}.
+   * Async only so a long run yields to the browser now and then.
+   *
+   * What this can and cannot say (kept short here, shown in full on the page):
+   *  - the rules were fixed beforehand, not fitted to this data, so the later
+   *    part is a fair check of the earlier part; but if YOU then tune the rules
+   *    while watching these numbers, you are fitting, and that evidence is gone;
+   *  - symbols delisted since are absent, so results lean optimistic;
+   *  - two years that include a strong market lift the baseline too, which is
+   *    why the comparison is against the baseline, not against zero. */
+  async function validateMarket(cl, kinds, rules, opts) {
+    opts = opts || {};
+    const r = normRules(rules), split = opts.split || 0.6, step = opts.step || 5, N = cl.d.length;
+    const cut = Math.floor(N * split);
+    const mk = () => ({ n: 0, wins: 0, sum: 0, sumR: 0 });
+    const acc = { all: { setup: mk(), base: mk() }, early: { setup: mk(), base: mk() }, late: { setup: mk(), base: mk() } };
+    const add = (bucket, x) => { bucket.n++; bucket.sum += x.ret; bucket.sumR += x.ret / x.risk; if (x.ret > 0) bucket.wins++; };
+    const codes = Object.keys(cl.items);
+    let symbols = 0;
+    for (let c = 0; c < codes.length; c++) {
+      const code = codes[c], row = cl.items[code], p = [], at = [];
+      for (let k = 0; k < row.length; k++) if (row[k] > 0) { p.push(row[k]); at.push(k); }
+      if (p.length >= 100) {
+        symbols++;
+        const kind = (kinds && kinds[code]) || "STOCK";
+        for (const [list, key] of [[setupTrades(p, kind, r), "setup"], [baselineTrades(p, kind, step), "base"]]) {
+          for (const x of list) { const per = at[x.i] < cut ? "early" : "late"; add(acc.all[key], x); add(acc[per][key], x); }
+        }
+      }
+      if (c % 200 === 199) { if (opts.onProgress) opts.onProgress(c + 1, codes.length); await new Promise((res) => setTimeout(res, 0)); }
+    }
+    const fin2 = (b) => ({ n: b.n, winRate: b.n ? b.wins / b.n : null, avgRet: b.n ? b.sum / b.n : null, avgR: b.n ? b.sumR / b.n : null });
+    const res = { symbols, rules: r, from: cl.d[0], split: cl.d[cut], to: cl.d[N - 1], step };
+    for (const per of ["all", "early", "late"]) res[per] = { setup: fin2(acc[per].setup), base: fin2(acc[per].base) };
+    return res;
   }
 
   const splitTerms = (s) => (s || "").toLowerCase().split(/[\s,，]+/).filter(Boolean);
@@ -289,36 +540,32 @@
 
   /* Why this symbol fails the first pass, or null when it passes.
    *
-   * The rules live HERE and nowhere else: candidates() filters with this and
-   * explain() reports from it, so the reason shown to a user can never
-   * disagree with what the filter actually did.
+   * `d` is a symbol's info from infoFromCloses()/snapshot(): its closed-bar
+   * state plus the few server-side figures (gap, avg_lots). The setup rules are
+   * NOT here: they live in SETUP_CHECKS and this only asks setupWhy(), so
+   * candidates() filters and explain() reports from the same rules and the
+   * reason on screen can never disagree with the filter. The first pass now
+   * judges the last CLOSED bar, exactly as the second pass and the historical
+   * replay do; the live quote only sets the entry price.
    *
-   * Liquidity uses the 20-day AVERAGE volume in lots (d.avg_lots, built from
-   * history). It used to use today's cumulative volume, which is tiny in the
-   * first minutes after the open and made a scan then reject almost
-   * everything. When avg_lots is absent (an older indicators.json) it falls
-   * back to the cumulative figure rather than failing. */
+   * Liquidity uses the 20-day AVERAGE volume in lots (d.avg_lots), not today's
+   * cumulative volume, which is tiny in the first minutes after the open and
+   * made a scan then reject almost everything. With no avg_lots (an older
+   * indicators.json) it falls back to the cumulative figure rather than failing. */
   function rejection(d, q, o) {
     q = q || {}; o = o || {};
     if (!d) return "沒有指標資料（新上市，或歷史資料尚未建置）";
     if (d.gap) return "價格在 " + d.gap.date + " 出現異常跳空，較早的資料未採用，歷史不足以判斷";
-    if (d.ma60 == null || d.ma20 == null || !(d.close > 0)) return "歷史只有 " + (d.rows || 0) + " 個交易日，算不出 60 日線";
-    const last = q.last > 0 ? q.last : d.close;
-    if (!(last > d.ma20)) return "收盤 " + f2(last) + " 在 20 日線 " + f2(d.ma20) + " 之下（不是多頭回檔）";
-    if (!(d.ma20 > d.ma60)) return "20 日線 " + f2(d.ma20) + " 沒有高於 60 日線 " + f2(d.ma60) + "（中期趨勢不是向上）";
-    if (last > d.ma20 * 1.06) return "收盤高出 20 日線 " + f2((last / d.ma20 - 1) * 100) + "%，超過 6%（太延伸，不追高）";
-    if (d.rsi == null) return "算不出 RSI";
-    if (d.rsi > 68) return "RSI " + f2(d.rsi) + " 高於上限 68（偏熱）";
-    if (d.rsi < 40) return "RSI " + f2(d.rsi) + " 低於下限 40（偏弱）";
-    if (d.hist != null && d.hist <= 0) return "MACD 柱 " + f2(d.hist) + " 不是正的（動能偏弱）";
-    const need = o.minVol == null ? 500 : o.minVol;                           // lots; thin names are untradeable
+    const why = setupWhy(d.state, o.rules);
+    if (why) return why;
+    const need = normRules(o.rules).minLots;                                  // lots; thin names are untradeable
     const lots = d.avg_lots != null ? d.avg_lots : (q.vol || 0);
     if (lots < need) return (d.avg_lots != null ? "近 20 日平均成交量 " : "今日累積成交量 ") +
       Math.round(lots).toLocaleString("en-US") + " 張，低於 " + need + " 張（流動性不足）";
     return null;
   }
 
-  /* Cheap first pass over indicators.json for every symbol in scope. */
+  /* Cheap first pass for every symbol in scope. o.ind = infoFromCloses() output. */
   function candidates(index, o) {
     const terms = splitTerms(o.term);
     const out = [];
@@ -326,8 +573,8 @@
       if (!inScope(it, o, terms)) continue;
       const d = (o.ind && o.ind[it.c]) || null, q = (o.quotes && o.quotes[it.c]) || {};
       if (rejection(d, q, o)) continue;
-      const last = q.last > 0 ? q.last : d.close;
-      const pull = 1 - clamp((last / d.ma20 - 1) / 0.06, 0, 1);               // closer to MA20 = better entry
+      const last = q.last > 0 ? q.last : d.close;                              // live price only RANKS: nearer the 20-day line = better entry
+      const pull = 1 - clamp((last / d.ma20 - 1) / 0.06, 0, 1);
       out.push({ it, pre: pull * 2 + clamp(d.vol_ratio || 1, 0, 2) + (d.ma5 > d.ma20 ? 1 : 0) });
     }
     return out.sort((a, b) => b.pre - a.pre);
@@ -370,7 +617,7 @@
   /* Full evaluation of one candidate against its own history.
    * Returns {r, reason}: r is the result, or null with `reason` saying which
    * check rejected it. evaluate() below keeps the old null-on-reject contract. */
-  function evaluateWhy(it, h, q, d, f) {
+  function evaluateWhy(it, h, q, d, f, rules) {
     const no = (reason) => ({ r: null, reason });
     const c = clean(h, d && d.gap);
     if (!c) return no("載入不到這檔的歷史資料");
@@ -378,10 +625,13 @@
     const p = c.p.slice();
     const an = analyze({ d: c.d, p });
     if (!an) return no("歷史資料不足以分析");
-    if (an.verdict === "賣出") return no("日週線綜合判斷為「賣出」（評分 " + f2(an.total) + "）");
+    /* The same rules, on the same closes, as the first pass: when a symbol got
+     * this far they agree, so this only disagrees if the two histories differ. */
     const a = { p, ma20: an.ma20, ma60: an.ma60, rsi: an.rsi, macd: an.macd };
-    if (!setupAt(a, p.length - 1)) return no("用完整歷史重算後，最新一天不符合多頭回檔型態（與預選的指標略有差異）");
-    const st = setupStats(p, it.k);
+    const setupReason = setupWhy(stateAt(a, p.length - 1), rules);
+    if (setupReason) return no(setupReason);
+    if (an.verdict === "賣出") return no("日週線綜合判斷為「賣出」（評分 " + f2(an.total) + "）");
+    const st = setupStats(p, it.k, rules);
     const entry = q && q.last > 0 ? q.last : p[p.length - 1], risk = riskPct(p);
     const stop = entry * (1 - risk), target = entry * (1 + 2 * risk);
     const res = an.levels.resistances[0], sup = an.levels.supports[0];
@@ -398,7 +648,7 @@
       stats: st, fund: fu.text, reasons, verdict: an.verdict, total: an.total, score }, reason: null };
   }
 
-  function evaluate(it, h, q, d, f) { return evaluateWhy(it, h, q, d, f).r; }
+  function evaluate(it, h, q, d, f, rules) { return evaluateWhy(it, h, q, d, f, rules).r; }
 
   /* ---------------------------------------------------------------- backtest */
   const STRATS = {
@@ -525,5 +775,7 @@
   const fpf = (v) => v == null ? "—" : v === Infinity ? "∞" : v.toFixed(2);
 
   root.Analysis = { sma, ema, rsi, macd, vol, clean, weekly, pivots, levels, trend, analyze, riskPct,
-    setupAt, setupStats, candidates, rejection, explain, evaluate, evaluateWhy, backtest, backtestReport, STRATS, COST_RT };
+    RULES_DEFAULT, normRules, isDefaultRules, SETUP_CHECKS, setupWhy, series, stateAt, snapshot, infoFromCloses,
+    setupAt, setupTrades, baselineTrades, setupStats, validateMarket, validationVerdict,
+    bars, weeklyBars, clampView, zoomView, panView, lastView, barInfo, candidates, inScope, splitTerms, rejection, explain, evaluate, evaluateWhy, backtest, backtestReport, STRATS, COST_RT };
 })(typeof window !== "undefined" ? window : globalThis);

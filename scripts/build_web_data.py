@@ -258,20 +258,28 @@ def yf_symbol(item):
     return item["c"] + (".TW" if item["b"] == "TWSE" else ".TWO")
 
 
-def frame_for(close_df, open_df, high_df, low_df, vol_df, sym):
-    """One symbol's OHLCV as a DataFrame, rows with no close dropped."""
+def frame_for(close_df, open_df, high_df, low_df, vol_df, sym, div_df=None):
+    """One symbol's OHLCV (+ cash dividend per share) as a DataFrame, rows with
+    no close dropped. `div` is 0.0 on every day except an ex-dividend date."""
     import pandas as pd
-    df = pd.DataFrame({"date": close_df.index.strftime("%Y-%m-%d"),
-                       "open": open_df[sym].values, "high": high_df[sym].values,
-                       "low": low_df[sym].values, "close": close_df[sym].values,
-                       "volume": vol_df[sym].values})
-    return df.dropna(subset=["close"]).reset_index(drop=True)
+    cols = {"date": close_df.index.strftime("%Y-%m-%d"),
+            "open": open_df[sym].values, "high": high_df[sym].values,
+            "low": low_df[sym].values, "close": close_df[sym].values,
+            "volume": vol_df[sym].values}
+    cols["div"] = (div_df[sym].fillna(0.0).values
+                   if div_df is not None and sym in div_df.columns else 0.0)
+    return pd.DataFrame(cols).dropna(subset=["close"]).reset_index(drop=True)
 
 
-# What the page actually shows. compute_indicators also returns *_prev values,
-# volume and more, plus two non-numeric fields (rows: int, date: str) that a
-# blanket float() conversion chokes on.
-WEB_NUMERIC = ("close", "ma5", "ma20", "ma60", "ma240", "k", "d", "rsi", "hist", "vol_ratio")
+# What the SERVER still computes: only what needs more than closing prices.
+#   k, d       KD needs high and low
+#   vol_ratio  and avg_lots need volume
+# The page holds only closes, so it cannot compute these, and the server holds
+# the same closes, so it must NOT compute MA / RSI / MACD: those have exactly
+# one implementation, docs/analysis.js, which the page runs on the same closes.
+# (compute_indicators also returns *_prev values and two non-numeric fields,
+# rows: int and date: str, which a blanket float() conversion chokes on.)
+WEB_NUMERIC = ("k", "d", "vol_ratio")
 
 
 def web_indicators(raw):
@@ -297,6 +305,17 @@ def web_indicators(raw):
     return out
 
 
+def _num(x, nd):
+    """float rounded to nd places; None for NaN/None so JSON stays valid."""
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return None
+    if x != x:
+        return None
+    return int(round(x)) if nd == 0 else round(x, nd)
+
+
 def process_symbol(df):
     """Cut at the last price discontinuity, then compute indicators on what is
     left. Returns (indicators, history, gap) or None when there is no data."""
@@ -311,7 +330,37 @@ def process_symbol(df):
     tail = seg.tail(HISTORY_DAYS)
     hist = {"d": tail["date"].tolist(),
             "p": [round(float(x), 2) for x in tail["close"]]}
+    # Open / high / low / volume (in lots of 1,000 shares) so the page can draw
+    # candles and show a day's full figures. null where Yahoo has no value; the
+    # page then falls back to the close for that day.
+    hist["o"], hist["h"], hist["l"] = ([_num(x, 2) for x in tail[k]] for k in ("open", "high", "low"))
+    hist["v"] = [_num(x / 1000, 0) if x == x and x is not None else None for x in tail["volume"]]
+    # Cash dividends by ex-date, inside the same window as the prices (so also
+    # only after any price gap). Yahoo states them in the same share units as
+    # its adjusted prices: 0050's 2025-01 dividend is 0.675 here but 2.70 in
+    # TWSE's table because of the 1-for-4 split since; every other row checked
+    # (2330, 00878, 2317, 1101) matches TWSE exactly.
+    if "div" in tail.columns:
+        divs = [[d, round(float(x), 4)] for d, x in zip(tail["date"], tail["div"]) if x and x > 0]
+        if divs:
+            hist["div"] = divs
     return ind, hist, gap
+
+
+def build_closes(histories):
+    """Every symbol's closes on ONE shared date axis (None where a symbol did
+    not trade or had not listed yet). The page loads this once to run the
+    scan's first pass and the market-wide validation with the same
+    analysis.js code that analyses a single symbol."""
+    dates = sorted({d for h in histories.values() for d in h["d"]})
+    where = {d: i for i, d in enumerate(dates)}
+    items = {}
+    for code, h in histories.items():
+        row = [None] * len(dates)
+        for d, p in zip(h["d"], h["p"]):
+            row[where[d]] = p
+        items[code] = row
+    return {"d": dates, "items": items}
 
 
 def build_history(out):
@@ -326,8 +375,10 @@ def build_history(out):
         syms = [yf_symbol(c) for c in chunk]
         try:
             df = yf.download(syms, period="2y", interval="1d", auto_adjust=False,
-                             progress=False, threads=False)   # threads=True drops tickers silently
+                             progress=False, threads=False,   # threads=True drops tickers silently
+                             actions=True)                    # adds the Dividends column
             o, h, l, c, v = (df[k] for k in ("Open", "High", "Low", "Close", "Volume"))
+            dv = df["Dividends"] if "Dividends" in df.columns.get_level_values(0) else None
         except Exception as exc:
             print(f"  batch {i // YF_BATCH}: {type(exc).__name__}: {str(exc)[:60]}")
             skipped += [x["c"] for x in chunk]
@@ -336,7 +387,7 @@ def build_history(out):
             if sym not in c.columns:
                 skipped.append(item["c"])
                 continue
-            res = process_symbol(frame_for(c, o, h, l, v, sym))
+            res = process_symbol(frame_for(c, o, h, l, v, sym, dv))
             if res is None:
                 skipped.append(item["c"])
                 continue
@@ -355,6 +406,7 @@ def build_history(out):
 
     for code, h in histories.items():
         write_json(out / "history" / f"{code}.json", {"c": code, **h})
+    write_json(out / "closes.json", build_closes(histories))
     write_json(out / "indicators.json", {"updated": stamp(), "items": indicators})
     write_json(out / "meta.json", {"history_updated": stamp(), "symbols": len(histories),
                                    "skipped": skipped, "gap_symbols": len(gaps)})

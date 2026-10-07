@@ -1,0 +1,47 @@
+name: ci
+
+# Runs on every push and pull request: the Python tests, then the browser test
+# pages against real market data. The site workflow deploys; this one judges.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Python tests
+        run: python -m pytest tests -q
+
+      # The browser pages read docs/data. Take the last good history from the
+      # data branch and fetch fresh quotes, the same as the site workflow.
+      - name: Restore data for the browser tests
+        run: |
+          if git ls-remote --exit-code --heads origin data >/dev/null 2>&1; then
+            git clone --quiet --depth 1 --branch data --single-branch \
+              "https://github.com/${GITHUB_REPOSITORY}.git" _data
+            rm -rf _data/.git
+            mkdir -p docs/data && cp -r _data/. docs/data/
+          else
+            echo "::error::no data branch yet - run the site workflow once with mode=full"
+            exit 1
+          fi
+          python scripts/build_web_data.py quotes --out docs/data
+
+      - name: Browser tests
+        run: python scripts/run_browser_tests.py --browser "$(command -v google-chrome || command -v chromium)"
