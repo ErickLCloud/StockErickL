@@ -217,9 +217,10 @@
   .home-box h3{margin:0 0 8px; font-size:15px; display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:8px}
   .home-box h3 > span{display:flex; gap:6px}
   .home-box .chip,.head .chip{white-space:nowrap}
-  .idxcards{display:flex; flex-wrap:wrap; gap:10px; margin-top:10px}
-  .idxcard{background:var(--soft); border-radius:12px; padding:10px 16px; min-width:150px; text-align:center}
-  .idxcard .v{font-size:22px; font-weight:700; display:block}
+  /* eight cards fit one row on a desktop-width page; they wrap to 4, 3, 2 across as the window narrows */
+  .idxcards{display:grid; grid-template-columns:repeat(auto-fit,minmax(138px,1fr)); gap:10px; margin-top:10px}
+  .idxcard{background:var(--soft); border-radius:12px; padding:10px 8px; min-width:0; text-align:center}
+  .idxcard .v{font-size:20px; font-weight:700; display:block}
   .idxcard .spark{display:block; margin:4px auto 0}
   .newslist{margin:0; padding-left:18px; columns:2 420px; column-gap:28px; font-size:13.5px; line-height:1.6}
   .newslist li{break-inside:avoid; margin:0 0 6px}

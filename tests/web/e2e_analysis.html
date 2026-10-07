@@ -377,6 +377,8 @@ async function until(fn, ms) { const end = Date.now() + (ms || 15000); while (Da
     t("home shows the OTC index card right after TAIEX when market.json has it", cards.length === 2 && d.querySelectorAll(".idxcard")[1].dataset.idx === "櫃買指數" && cards[1].includes("櫃買指數") && cards[1].includes("430.46") && cards[1].includes("-0.40") && cards[1].includes("-0.09%") && cards[1].includes("2026-10-07"), cards.join(" | "));
     Sx.market = mk0; $("tab-home").click();
     t("without otc in market.json there is no OTC card (no broken card)", !d.querySelector('.idxcard[data-idx="櫃買指數"]') && !!d.querySelector('.idxcard[data-idx="加權指數"]'));
+    t("index cards sit in a responsive grid and never overflow the page sideways", w.getComputedStyle(d.querySelector(".idxcards")).display === "grid" && d.documentElement.scrollWidth <= d.documentElement.clientWidth + 1,
+      d.documentElement.scrollWidth + " vs " + d.documentElement.clientWidth);
     const g0 = Sx.globals;
     Sx.globals = { items: [{ key: "txf", name: "台指期", price: 49979, chg: -103, pct: -0.21, time: "2026-10-07 13:45", spark: null },
       { key: "dji", name: "道瓊", price: 51521.28, chg: 253.38, pct: 0.49, time: "2026-10-07 04:42", spark: [1, 3, 2, 5] }], errors: ["sox"] };
