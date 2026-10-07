@@ -354,3 +354,17 @@ def test_the_gap_cut_applies_to_every_series():
     assert gap is not None
     assert len(hist["o"]) == len(hist["v"]) == len(hist["d"]) == 100
     assert max(hist["h"]) < 30
+
+
+# ------------------------------------------------------------- industries
+
+def test_parse_industries_reads_both_exchanges_and_skips_unnamed_codes():
+    twse = [{"公司代號": "2330", "產業別": "24"}, {"公司代號": "1101", "產業別": "01"}, {"公司代號": "9999", "產業別": "91"}]
+    tpex = [{"SecuritiesCompanyCode": "8299", "SecuritiesIndustryCode": "24"}, {"SecuritiesCompanyCode": "6488", "SecuritiesIndustryCode": "zz"}]
+    got = bw.parse_industries(twse, tpex)
+    assert got == {"2330": "半導體業", "1101": "水泥工業", "8299": "半導體業"}
+
+
+def test_parse_industries_survives_junk_and_empty_input():
+    assert bw.parse_industries(None, []) == {}
+    assert bw.parse_industries([{"公司代號": None, "產業別": None}, {}], [{}]) == {}

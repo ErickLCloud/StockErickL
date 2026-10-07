@@ -243,9 +243,11 @@ async function until(fn, ms) { const end = Date.now() + (ms || 15000); while (Da
     t("…and comes back on return", dock.hidden === false && !!d.getElementById("ch-svg"));
     Sx.hist[code] = h0; w.eval("paintTA()");
   }
-  t("step table present", d.querySelectorAll("#detail tbody tr").length >= 6, d.querySelectorAll("#detail tbody tr").length);
+  t("step table present, and BELOW the chart (not in the narrow right panel)", d.querySelectorAll("#steptable tbody tr").length >= 6 && !$("detail").querySelector("#steptable") &&
+    !!d.getElementById("chartdock").querySelector("#steptable"), d.querySelectorAll("#steptable tbody tr").length);
+  t("right panel keeps just the conclusion: verdict + plan + score line, short", $("detail").textContent.length < 700 && !!$("detail").querySelector(".verdict"), $("detail").textContent.length);
   t("verdict is one of three", ["買進", "持有", "賣出"].includes(verdict.textContent.trim()));
-  t("no NaN / undefined in analysis text", !/NaN|undefined|Infinity/.test($("detail").textContent), $("detail").textContent.match(/.{20}(NaN|undefined|Infinity).{20}/));
+  t("no NaN / undefined in analysis text", !/NaN|undefined|Infinity/.test($("detail").textContent + d.getElementById("chartdock").textContent), ($("detail").textContent + d.getElementById("chartdock").textContent).match(/.{20}(NaN|undefined|Infinity).{20}/));
   log.push(code + " -> " + verdict.textContent + " | " + $("detail").textContent.replace(/\s+/g, " ").slice(0, 250));
 
   /* switching symbol while on this tab stays on this tab */
@@ -275,6 +277,40 @@ async function until(fn, ms) { const end = Date.now() + (ms || 15000); while (Da
   $("bt-a").value = 30; $("bt-b").value = 10; $("bt-run").click();
   await until(() => /必須大於/.test($("detail").textContent));
   t("fast >= slow is rejected", /慢線必須大於快線/.test($("detail").textContent));
+
+  /* ---- sectors */
+  {
+    const Sx = w.eval("S"), A = w.Analysis;
+    $("tab-sector").click();
+    await until(() => Sx.sec.ready && d.querySelector("#sectable tbody tr.secrow"), 30000);
+    const rows = [...d.querySelectorAll("#sectable tbody tr.secrow")];
+    t("sector view lists groups, with the symbol list hidden to make room", rows.length > 10 && w.getComputedStyle(d.querySelector(".cols > .panel")).display === "none", rows.length);
+    t("industries and themes are both present", d.querySelector("#sectable").textContent.includes("產業") && d.querySelector("#sectable").textContent.includes("題材"));
+    const raw = (c, n) => { const r = Sx.closes.items[c], L = Sx.closes.d.length - 1; return r[L] / r[L - n] - 1; };
+    const pctTxt = (v) => (v > 0 ? "+" : "") + (v * 100).toFixed(2) + "%";
+    const th = (Sx.themes.themes.find((x) => x.name === "晶圓代工") || {}).codes || [];
+    const have = th.filter((c) => Sx.closes.items[c] && Sx.closes.items[c][Sx.closes.d.length - 1] > 0 && !(Sx.info[c] && Sx.info[c].gap));
+    if (have.length) {
+      const mean5 = have.reduce((s, c) => s + raw(c, 5), 0) / have.length;
+      const row = rows.find((r) => r.textContent.includes("晶圓代工"));
+      t("a theme's 5-day figure equals the mean of its members' raw 5-day returns", row && row.textContent.includes(pctTxt(mean5)), (row && row.textContent.slice(0, 100)) + " vs " + pctTxt(mean5));
+    }
+    d.querySelector('[data-sec-period="20"]').click();
+    t("choosing 20日 re-sorts by 20 days (descending)", (() => {
+      const vals = [...d.querySelectorAll("#sectable tbody tr.secrow")].map((r) => parseFloat(r.children[4].textContent)).filter((x) => !isNaN(x));
+      return vals.length > 5 && vals.every((x, i) => i === 0 || vals[i - 1] >= x);
+    })());
+    d.querySelector('[data-sec-kind="theme"]').click();
+    t("kind filter: themes only", [...d.querySelectorAll("#sectable tbody tr.secrow")].every((r) => r.textContent.includes("題材")));
+    d.querySelector('[data-sec-stat="median"]').click();
+    t("median switch is on", d.querySelector('[data-sec-stat="median"]').getAttribute("aria-pressed") === "true");
+    d.querySelector("#sectable tbody tr.secrow").click();
+    t("clicking a row expands its members, each with a link to analysis", d.querySelectorAll("tr.secmem [data-go=ta]").length >= 2);
+    d.querySelector("tr.secmem [data-go=ta]").click();
+    await until(() => $("tab-ta").getAttribute("aria-pressed") === "true");
+    t("the link opens the analysis of that member", $("tab-ta").getAttribute("aria-pressed") === "true");
+    t("no NaN/undefined anywhere in the sector view", (() => { $("tab-sector").click(); return !/NaN|undefined|Infinity/.test($("detail").textContent); })());
+  }
 
   /* views left alone still work */
   $("tab-hold").click(); t("holdings tab still works", !!$("lotform"));

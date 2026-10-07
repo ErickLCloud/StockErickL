@@ -103,6 +103,34 @@ def parse_universe(twse_rows, tpex_rows):
     return out
 
 
+# Official industry (產業別) per company, from each exchange's company-profile
+# open data. The code is the exchange's own two-digit code; 20 is the exchange's
+# "其他" and 91 is depositary receipts, which are left out of sector comparisons.
+TWSE_PROFILE = "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
+TPEX_PROFILE = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O"
+INDUSTRY_NAMES = {
+    "01": "水泥工業", "02": "食品工業", "03": "塑膠工業", "04": "紡織纖維", "05": "電機機械", "06": "電器電纜",
+    "08": "玻璃陶瓷", "09": "造紙工業", "10": "鋼鐵工業", "11": "橡膠工業", "12": "汽車工業", "14": "建材營造",
+    "15": "航運業", "16": "觀光餐旅", "17": "金融保險", "18": "貿易百貨", "21": "化學工業", "22": "生技醫療",
+    "23": "油電燃氣", "24": "半導體業", "25": "電腦及週邊設備", "26": "光電業", "27": "通信網路業",
+    "28": "電子零組件業", "29": "電子通路業", "30": "資訊服務業", "31": "其他電子業", "32": "文化創意業",
+    "33": "農業科技業", "34": "電子商務", "35": "綠能環保", "36": "數位雲端", "37": "運動休閒", "38": "居家生活",
+}
+
+
+def parse_industries(twse_rows, tpex_rows):
+    """code -> industry name. Codes the table does not name (其他, 存託憑證, ...) are left out."""
+    out = {}
+    for rows, f_code, f_ind in ((twse_rows, "公司代號", "產業別"),
+                                (tpex_rows, "SecuritiesCompanyCode", "SecuritiesIndustryCode")):
+        for r in rows or []:
+            code = (r.get(f_code) or "").strip()
+            name = INDUSTRY_NAMES.get((r.get(f_ind) or "").strip())
+            if code and name:
+                out[code] = name
+    return out
+
+
 def fetch_universe(fetch=None):
     fetch = fetch or fetch_json     # resolved per call so tests can substitute it
     return parse_universe(fetch(TWSE_DAY), fetch(TPEX_DAY))
@@ -229,10 +257,19 @@ def build_quotes(out):
         fund = {}
     live, failed = fetch_intraday(uni)
     items = {i["c"]: quote_item(live.get(i["c"]), i) for i in uni}
+    try:
+        industry = parse_industries(_try(TWSE_PROFILE), _try(TPEX_PROFILE))
+    except Exception:
+        industry = {}                    # sector view then shows themes only; never blocks the price refresh
+
+    def index_row(i):
+        row = {k: i[k] for k in ("c", "n", "b", "k")}
+        if i["c"] in industry and i["k"] != "ETF":
+            row["s"] = industry[i["c"]]
+        return row
 
     write_json(out / "index.json", {"updated": stamp(),
-                                    "items": [{k: i[k] for k in ("c", "n", "b", "k")}
-                                              for i in uni]})
+                                    "items": [index_row(i) for i in uni]})
     write_json(out / "fundamental.json", {"updated": stamp(), "items": fund})
     write_json(out / "quotes.json", {
         "updated": stamp(),

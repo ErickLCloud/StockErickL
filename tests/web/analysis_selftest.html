@@ -80,6 +80,35 @@ t("lastView shows the most recent bars", cv(A.lastView(100, 30)) === cv({ a: 70,
   t("barInfo: first bar has no change; out of range is null", A.barInfo(bs, A.series([10, 12]), 0).chg === null && A.barInfo(bs, A.series([10, 12]), 5) === null);
 }
 
+/* ---- sectors, hand-computed. Dates d0..d6; last index 6. */
+{
+  const cl = { d: ["d0", "d1", "d2", "d3", "d4", "d5", "d6"], items: {
+    A: [100, 100, 100, 100, 100, 100, 110],            // +10% over any window
+    B: [50, 50, 50, 50, 50, 50, 45],                   // -10%
+    C: [20, 20, 20, 20, 20, 20, 20],                   // flat
+    G: [1000, 1000, 10, 10, 10, 10, 11],               // split-like gap at d2: windows reaching before d2 are excluded
+    H: [null, null, null, null, 10, 10, 12] } };       // listed late: only short windows
+  const info = { G: { gap: { date: "d2" } } };
+  t("periodReturn: last vs n bars back", Math.abs(A.periodReturn(cl.items.A, 6, 5, 0) - 0.1) < 1e-12 && Math.abs(A.periodReturn(cl.items.B, 6, 1, 0) - (-0.1)) < 1e-12);
+  t("periodReturn: not enough history / missing close -> null", A.periodReturn(cl.items.A, 6, 7, 0) === null && A.periodReturn(cl.items.H, 6, 5, 0) === null);
+  const r = A.memberReturns(cl, {}, info, null, [1, 4, 5]);
+  t("memberReturns: gap blocks windows reaching before it (G 4 back is d2: ok; 5 back is d1: null)", Math.abs(r.G[4] - 0.1) < 1e-12 && r.G[5] === null, JSON.stringify(r.G));
+  t("memberReturns: late listing has short windows only", Math.abs(r.H[1] - 0.2) < 1e-12 && r.H[5] === null);
+  const rq = A.memberReturns(cl, { A: { pct: 3.5 }, B: {} }, info, null, [1]);
+  t("memberReturns: day-1 uses the live quote's change when present (percent -> fraction)", Math.abs(rq.A[1] - 0.035) < 1e-12 && Math.abs(rq.B[1] - (-0.1)) < 1e-12);
+  const idx = [{ c: "A", n: "a", k: "STOCK", s: "甲業" }, { c: "B", n: "b", k: "STOCK", s: "甲業" }, { c: "C", n: "c", k: "STOCK", s: "乙業" }, { c: "E1", n: "e", k: "ETF", s: "甲業" }, { c: "H", n: "h", k: "STOCK" }];
+  const grp = A.sectorGroups(idx, { themes: [{ name: "題", codes: ["A", "C", "A", "NOPE"] }, { name: "空", codes: ["ZZ"] }] });
+  t("sectorGroups: industry from index.s (ETFs skipped), themes deduped, unknown codes dropped, empty themes omitted",
+    grp.length === 3 && grp.find((g) => g.key === "i:甲業").codes.join() === "A,B" && grp.find((g) => g.key === "t:題").codes.join() === "A,C" && !grp.some((g) => g.name === "空"), JSON.stringify(grp.map((g) => g.key + ":" + g.codes)));
+  const rets = A.memberReturns(cl, {}, {}, null, [5]);
+  const st = A.sectorStats(grp, rets, [5]);
+  const jia = st.find((g) => g.key === "i:甲業").ret[5], ti = st.find((g) => g.key === "t:題").ret[5];
+  t("sectorStats: mean/median/up-share/n for {+10%, -10%}", Math.abs(jia.mean) < 1e-12 && Math.abs(jia.median) < 1e-12 && jia.up === 0.5 && jia.n === 2, JSON.stringify(jia));
+  t("sectorStats: {+10%, 0%}: mean 5%, up share .5", Math.abs(ti.mean - 0.05) < 1e-12 && ti.up === 0.5);
+  t("sectorStats: no member data -> null", A.sectorStats([{ key: "x", codes: ["H"] }], A.memberReturns(cl, {}, {}, null, [5]), [5])[0].ret[5] === null);
+  t("sectorStats: median of three {+10,-10,0} is 0", Math.abs(A.sectorStats([{ key: "k", codes: ["A", "B", "C"] }], rets, [5])[0].ret[5].median) < 1e-12);
+}
+
 /* ---- backtest: hand-computed one-trade case (breakout N=2, M=2)
  * p = [10,10,10,11,12,13,12,11,10,9]
  * signal i=3 (11 > max(10,10)) -> buy at i=4 close 12.

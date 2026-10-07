@@ -78,6 +78,9 @@
   /* ---- content */
   .cols{display:grid; grid-template-columns:330px 1fr; gap:16px; align-items:start}
   @media (max-width:1180px){ .cols{grid-template-columns:1fr} }
+  /* wide views (scan, sectors) are tables: the symbol list beside them would only squeeze the columns */
+  .cols.wide{grid-template-columns:1fr}
+  .cols.wide > .panel:first-child{display:none}
   .panel{background:var(--panel); border-radius:10px; box-shadow:var(--shadow); overflow:hidden; position:relative}
   .pad{padding:16px 18px; position:relative; z-index:1}
   /* the slanted colour band from the reference hero, drawn in CSS */
@@ -185,6 +188,14 @@
   .verdict{display:inline-block; font-weight:700; padding:3px 18px; border-radius:999px; color:#fff; font-size:16px; letter-spacing:.2em}
   .verdict.buy{background:#d6453a} .verdict.sell{background:#12915f} .verdict.hold{background:#7b8f85}
   [hidden]{display:none !important}
+  .seccards{display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px}
+  @media (max-width:640px){ .seccards{grid-template-columns:1fr} }
+  .seccard{background:var(--soft); border-radius:10px; padding:10px 14px}
+  .secline{display:flex; justify-content:space-between; padding:2px 0; font-size:13.5px}
+  #sectable td.selcol{font-weight:700}
+  #sectable th,#sectable td{padding:7px 8px; white-space:nowrap}
+  #sectable td.l{text-align:left}
+  .secmem>td{padding:0 0 8px 18px; background:var(--soft)}
   #chartdock{margin-top:18px}
   .chbar{display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:10px}
   .chhint{font-size:12px}
@@ -208,6 +219,7 @@
       <button class="tab" id="tab-market" aria-pressed="false"><svg viewBox="0 0 32 32" aria-hidden="true"><rect x="5" y="17" width="4.5" height="9"/><rect x="13.7" y="11" width="4.5" height="15"/><rect x="22.5" y="5" width="4.5" height="21"/></svg><span>看板</span></button>
       <button class="tab" id="tab-hold" aria-pressed="false"><svg viewBox="0 0 32 32" aria-hidden="true"><rect x="4" y="10" width="24" height="16" rx="3"/><path d="M11 10V7.5A2.5 2.5 0 0 1 13.5 5h5A2.5 2.5 0 0 1 21 7.5V10"/><path d="M4 17h24"/></svg><span>持倉</span></button>
       <button class="tab" id="tab-scan" aria-pressed="false"><svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="14" cy="14" r="8"/><path d="M20 20l7 7"/><path d="M10.5 15l2.5-2.5 2 2 3-3.5"/></svg><span>選股</span></button>
+      <button class="tab" id="tab-sector" aria-pressed="false"><svg viewBox="0 0 32 32" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5"/><rect x="18" y="5" width="9" height="9" rx="1.5"/><rect x="5" y="18" width="9" height="9" rx="1.5"/><rect x="18" y="18" width="9" height="9" rx="1.5"/></svg><span>類股</span></button>
       <button class="tab" id="tab-ta" aria-pressed="false"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 26V6"/><path d="M4 26h24"/><path d="M8 20l5-6 4 3 7-9"/></svg><span>分析</span></button>
       <button class="tab" id="tab-bt" aria-pressed="false"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 16a9 9 0 1 0 3-6.7"/><path d="M6 5v6h6"/><path d="M16 11v5.5l3.5 2"/></svg><span>回測</span></button>
     </nav>
@@ -220,7 +232,7 @@
 
   <div class="wrap">
 
-<div class="cols">
+<div class="cols" id="cols">
     <div class="panel">
       <div class="pad">
         <input id="q" type="search" placeholder="代號或名稱，例如 2330、台積"
@@ -862,9 +874,9 @@ function chData(code, tf){
 }
 const chDefaultCount = () => CH.tf === "D" ? 150 : 80;
 
-function paintDock(an){
+function paintDock(an, below){
   const dock = $("chartdock"), code = S.sel, d = chData(code, CH.tf), n = d.bs.length;
-  CH.an = an;
+  CH.an = an; if(below !== undefined) CH.below = below;
   if(CH.code !== code || CH.tfShown !== CH.tf || !CH.view){
     CH.view = A.lastView(n, chDefaultCount()); CH.cursor = n - 1; CH.pinned = false; CH.code = code; CH.tfShown = CH.tf;
   }else{
@@ -884,7 +896,7 @@ function paintDock(an){
     '<div id="ch-info" aria-live="polite"></div>' +
     '<div id="ch-wrap" tabindex="0" aria-label="K 線圖，可用方向鍵逐日查看"></div>' +
     '<div class="note">紅漲綠跌。MA5 橘、MA20 紫、MA60 青；虛線為壓力（紅）／支撐（綠）與趨勢通道。' +
-    '週線由日線的開高低收量合併（週一為一週之始）。成交量單位為張。指標用收盤價計算，和選股、分析的判斷是同一套。</div></div>';
+    '週線由日線的開高低收量合併（週一為一週之始）。成交量單位為張。指標用收盤價計算，和選股、分析的判斷是同一套。</div></div>' + (CH.below || "");
   drawChart();
 }
 
@@ -1112,17 +1124,106 @@ function paintTA(){
     '<div class="sub">已持有者可續抱，並以 ' + (an.levels.supports[0] ? n2(an.levels.supports[0].price) : n2(an.ma60[n - 1])) + '（下方支撐）作為防守；空手者等訊號轉強再進。</div>';
   const sg = (v) => (v > 0 ? "+" : "") + v;
 
+  /* The right panel keeps only the conclusion; the long table and notes go below the chart at full width. */
   $("detail").innerHTML = head +
     '<div class="head" style="margin-top:12px"><span class="verdict ' + vc + '">' + an.verdict + '</span>' +
       '<span>' + esc(an.why) + '</span></div>' + plan +
-    '<div class="sub"><a href="#chartdock">↓ K 線圖在下方</a>：可縮放、平移，並點選任一天看開高低收與 RSI、MACD。</div>' +
-    '<div class="sub">逐步訊號（週線定方向，日線定時機）：週 ' + sg(an.wScore) + '、日 ' + sg(an.dScore) + '、合計 ' + sg(an.total) + '</div>' +
-    '<div class="scroll"><table><thead><tr><th>週期</th><th class="l">項目</th><th>分數</th><th class="l">說明</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+    '<div class="sub">訊號分數：週 ' + sg(an.wScore) + '、日 ' + sg(an.dScore) + '、合計 ' + sg(an.total) + '　<a href="#chartdock">↓ K 線圖與逐步訊號在下方</a></div></div>';
+  const below = '<div class="pad" id="ta-below" style="padding-top:0"><div class="sub">逐步訊號（週線定方向，日線定時機）：週 ' + sg(an.wScore) + '、日 ' + sg(an.dScore) + '、合計 ' + sg(an.total) + '</div>' +
+    '<div class="scroll"><table id="steptable"><thead><tr><th>週期</th><th class="l">項目</th><th>分數</th><th class="l">說明</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
     (tr.supLine ? '<div class="note">上升趨勢線（連接最近兩個低點）目前約在 ' + n2(tr.supLine.now) + '，跌破視為趨勢轉弱。</div>' : "") +
     (tr.resLine ? '<div class="note">下降趨勢線（連接最近兩個高點）目前約在 ' + n2(tr.resLine.now) + '，突破視為轉強。</div>' : "") +
     '<div class="note">買進需合計 ≥ +4 且週線分數不為負；≤ -4 為賣出；其餘持有。本週若尚未收完，週線以最新收盤暫代。' +
     '支撐壓力為收盤價的轉折群聚，不含盤中高低點。</div>' + DISCLAIMER + '</div>';
-  paintDock(an);
+  paintDock(an, below);
+}
+
+/* ---- 5. sectors and themes: how each group moved over 1 / 5 / 20 / 60 / 120 / 240 trading days.
+ * Numbers come from Analysis.sectorStats (equal-weighted mean or median of the members). */
+const SEC_PERIODS = [[1, "今日"], [5, "5日"], [20, "20日"], [60, "60日"], [120, "120日"], [240, "240日"]];
+const SEC_SCALE = {1: 0.04, 5: 0.08, 20: 0.15, 60: 0.3, 120: 0.5, 240: 0.8};   // return that earns a full-strength tint
+S.sec = {period: 5, stat: "mean", kind: "all", open: null, sort: 5, dir: -1, ready: false, err: null};
+
+const spct = (v) => v == null ? "—" : (v > 0 ? "+" : "") + (v * 100).toFixed(2) + "%";
+function heat(v, p){
+  if(v == null) return "";
+  const a = Math.min(0.42, Math.abs(v) / SEC_SCALE[p] * 0.42);
+  return ' style="background:' + (v > 0 ? "rgba(214,69,58," : "rgba(18,145,95,") + a.toFixed(2) + ')"';
+}
+
+function secCompute(){
+  const sec = S.sec, groups = A.sectorGroups(S.index, S.themes);
+  const codes = [...new Set(groups.flatMap((g) => g.codes))];
+  const rets = A.memberReturns(S.closes, S.quotes, S.info, codes);
+  return {groups, rets, stats: A.sectorStats(groups, rets)};
+}
+
+function secValue(g, p){ const x = g.ret[p]; return x ? x[S.sec.stat] : null; }
+
+function paintSector(){
+  const sec = S.sec;
+  if(!sec.ready){
+    $("detail").innerHTML = '<div class="pad"><div class="head"><span class="sym">類股漲跌</span></div><div class="empty">' +
+      (sec.err ? "載入失敗：" + esc(sec.err) : "載入全市場收盤價與類股清單…") + '</div></div>';
+    if(!sec.err && !sec.loading){
+      sec.loading = true;
+      (async () => {
+        try{
+          try{ S.themes = await getJSON("themes.json", false); }catch(e){ S.themes = {themes: []}; }
+          await loadCloses(); sec.ready = true;
+        }catch(e){ sec.err = String(e && e.message || e); }
+        sec.loading = false;
+        if(S.view === "sector") paintSector();
+      })();
+    }
+    return;
+  }
+  const {rets, stats} = secCompute(), p = sec.period;
+  const hasIndustry = S.index.some((i) => i.s);
+  const rows = stats.filter((g) => sec.kind === "all" || g.kind === sec.kind);
+  const val = (g) => sec.sort === "name" ? g.name : sec.sort === "n" ? g.codes.length : secValue(g, sec.sort);
+  rows.sort((a, b) => {
+    const x = val(a), y = val(b);
+    if(x == null && y == null) return 0; if(x == null) return 1; if(y == null) return -1;
+    return (x < y ? -1 : x > y ? 1 : 0) * sec.dir;
+  });
+  const ranked = rows.filter((g) => secValue(g, p) != null && g.ret[p].n >= 2).sort((a, b) => secValue(b, p) - secValue(a, p));
+  const card = (title, list) => '<div class="seccard"><div class="sub" style="margin:0 0 6px">' + title + '</div>' + (list.length ? list.map((g) =>
+    '<div class="secline"><span>' + esc(g.name) + '</span><b class="' + cls(secValue(g, p)) + '">' + spct(secValue(g, p)) + '</b></div>').join("") : '<div class="flat">—</div>') + '</div>';
+  const lab = SEC_PERIODS.find((x) => x[0] === p)[1];
+  const chip = (attr, val, label, on) => '<button class="chip" ' + attr + '="' + val + '" aria-pressed="' + on + '">' + label + '</button>';
+  const arrow = (k) => sec.sort === k ? (sec.dir > 0 ? " ▲" : " ▼") : "";
+  const th = (k, label, extra) => '<th data-sec-sort="' + k + '" style="cursor:pointer"' + (extra || "") + '>' + label + arrow(k) + '</th>';
+  const body = rows.map((g) => {
+    const open = sec.open === g.key;
+    let h = '<tr class="secrow" data-sec-open="' + esc(g.key) + '" style="cursor:pointer"><td class="l"><strong>' + (open ? "▾ " : "▸ ") + esc(g.name) + '</strong> <span class="tag">' +
+      (g.kind === "industry" ? "產業" : "題材") + '</span></td><td>' + g.codes.length + '</td>' +
+      SEC_PERIODS.map(([n]) => '<td' + heat(secValue(g, n), n) + (n === p ? ' class="selcol"' : "") + '>' + spct(secValue(g, n)) + '</td>').join("") +
+      '<td>' + (g.ret[p] ? Math.round(g.ret[p].up * 100) + "%" : "—") + '</td></tr>';
+    if(open){
+      const ms = g.codes.filter((c) => rets[c]).map((c) => ({c, r: rets[c]})).sort((a, b) => (b.r[p] == null ? -9 : b.r[p]) - (a.r[p] == null ? -9 : a.r[p]));
+      h += '<tr class="secmem"><td colspan="9"><div class="scroll" style="margin-top:0"><table><thead><tr><th class="l">代號 名稱</th><th>現價</th>' +
+        SEC_PERIODS.map(([, l]) => '<th>' + l + '</th>').join("") + '<th></th></tr></thead><tbody>' +
+        ms.map((m) => { const it = S.byCode[m.c] || {}, q = S.quotes[m.c] || {};
+          return '<tr><td class="l"><strong>' + esc(m.c) + '</strong> ' + esc(it.n || "") + '</td><td>' + n2(q.last > 0 ? q.last : null) + '</td>' +
+            SEC_PERIODS.map(([n]) => '<td' + heat(m.r[n], n) + '>' + spct(m.r[n]) + '</td>').join("") +
+            '<td><button class="act" data-go="ta" data-code="' + esc(m.c) + '">分析</button></td></tr>'; }).join("") +
+        '</tbody></table></div></td></tr>';
+    }
+    return h;
+  }).join("");
+  const last = S.closes.d[S.closes.d.length - 1];
+  $("detail").innerHTML = '<div class="pad"><div class="head"><span class="sym">類股漲跌</span><span class="tag">' + rows.length + ' 個類股／題材</span></div>' +
+    '<div class="chbar">' + SEC_PERIODS.map(([n, l]) => chip("data-sec-period", n, l, p === n)).join("") + '<span class="sep"></span>' +
+    chip("data-sec-kind", "all", "全部", sec.kind === "all") + chip("data-sec-kind", "industry", "產業別", sec.kind === "industry") + chip("data-sec-kind", "theme", "題材", sec.kind === "theme") +
+    '<span class="sep"></span>' + chip("data-sec-stat", "mean", "平均", sec.stat === "mean") + chip("data-sec-stat", "median", "中位數", sec.stat === "median") + '</div>' +
+    (hasIndustry ? "" : '<div class="alert">官方產業別要等下一次完整建置才有，目前只有題材。</div>') +
+    '<div class="seccards">' + card(lab + " 領漲", ranked.slice(0, 5)) + card(lab + " 領跌", ranked.slice(-5).reverse()) + '</div>' +
+    '<div class="scroll"><table id="sectable"><thead><tr>' + th("name", "類股／題材", ' class="l"') + th("n", "家數") +
+    SEC_PERIODS.map(([n, l]) => th(n, l)).join("") + '<th>' + lab + ' 上漲比</th></tr></thead><tbody>' + (body || '<tr><td colspan="9"><div class="empty">沒有資料。</div></td></tr>') + '</tbody></table></div>' +
+    '<div class="note">每格是該類股成分股報酬的' + (sec.stat === "mean" ? "<strong>等權平均</strong>" : "<strong>中位數</strong>") + '（沒有市值資料，無法市值加權；小型股的大波動會拉動平均，可切到中位數對照）。' +
+    '「今日」用最新報價的漲跌，其餘以收盤計算至 ' + esc(last) + '；價格有異常跳空的個股，跨過跳空的期間不計入。領漲／領跌只列至少 2 檔有資料的類股。' +
+    '「產業別」是證交所／櫃買中心的分類，「題材」是自訂清單（themes.json，草稿，可自行增修）；同一檔可同時屬於產業與多個題材。點一列展開成分股。</div>' + DISCLAIMER + '</div>';
 }
 
 /* ---- 4. backtest */
@@ -1374,8 +1475,9 @@ function importLots(file){
 }
 
 /* -------------------------------------------------------------- views */
-const TABS = {market:"tab-market", holdings:"tab-hold", scan:"tab-scan", ta:"tab-ta", bt:"tab-bt"};
+const TABS = {market:"tab-market", holdings:"tab-hold", scan:"tab-scan", sector:"tab-sector", ta:"tab-ta", bt:"tab-bt"};
 function syncTabs(){
+  $("cols").classList.toggle("wide", S.view === "scan" || S.view === "sector");
   if(S.view !== "ta") $("chartdock").hidden = true;
   for(const [v, id] of Object.entries(TABS)) $(id).setAttribute("aria-pressed", String(S.view === v));
 }
@@ -1388,6 +1490,7 @@ function setView(v, prefill){
 function paintCurrent(){
   if(S.view === "holdings") return;
   if(S.view === "scan") return paintScan();
+  if(S.view === "sector") return paintSector();
   if(S.view === "ta" || S.view === "bt"){
     if(S.sel && S.hist[S.sel] === undefined) loadHist(S.sel).then(() => { if(S.view === "ta" || S.view === "bt") paintCurrent(); });
     return S.view === "ta" ? paintTA() : paintBT();
@@ -1416,6 +1519,12 @@ $("detail").addEventListener("click", (e) => {
   if(t.closest(".r")){ S.range = +t.closest(".r").dataset.r; paintDetail(S.sel); return; }
   if(t.closest("#d-star")){ toggleWatch(S.sel); return; }
   if(t.closest("#d-add")){ setView("holdings", S.sel); return; }
+  const sp = t.closest("[data-sec-period]"), sk = t.closest("[data-sec-kind]"), st = t.closest("[data-sec-stat]"), ss = t.closest("[data-sec-sort]"), so2 = t.closest("[data-sec-open]");
+  if(sp){ S.sec.period = +sp.dataset.secPeriod; S.sec.sort = S.sec.period; S.sec.dir = -1; paintSector(); return; }
+  if(sk){ S.sec.kind = sk.dataset.secKind; paintSector(); return; }
+  if(st){ S.sec.stat = st.dataset.secStat; paintSector(); return; }
+  if(ss){ const k = ss.dataset.secSort, kk = k === "name" || k === "n" ? k : +k; S.sec.dir = S.sec.sort === kk ? -S.sec.dir : (kk === "name" ? 1 : -1); S.sec.sort = kk; paintSector(); return; }
+  if(so2 && !t.closest("[data-go]")){ S.sec.open = S.sec.open === so2.dataset.secOpen ? null : so2.dataset.secOpen; paintSector(); return; }
   if(t.closest("#scan-run")){ runScan(); return; }
   const ws = t.closest("[data-wstar]");
   if(ws){ toggleWatch(ws.dataset.wstar); paintScanTable(); return; }
@@ -1471,6 +1580,7 @@ $("detail").addEventListener("input", (e) => {
 $("tab-market").addEventListener("click", () => setView("market"));
 $("tab-hold").addEventListener("click", () => setView("holdings"));
 $("tab-scan").addEventListener("click", () => setView("scan"));
+$("tab-sector").addEventListener("click", () => setView("sector"));
 $("tab-ta").addEventListener("click", () => setView("ta"));
 $("tab-bt").addEventListener("click", () => setView("bt"));
 

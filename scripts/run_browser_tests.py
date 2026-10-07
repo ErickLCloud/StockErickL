@@ -42,8 +42,10 @@ def find_browser(explicit=None):
 
 def verdict(dom):
     """('PASS'|'FAIL'|'NONE', first line) from a dumped DOM."""
-    m = re.search(r"RESULT: (PASS|FAIL)[^\n<]*", dom)
-    return (m.group(1), m.group(0)) if m else ("NONE", "no RESULT line in the page")
+    # Only the page's own output element counts. The test pages quote "RESULT: PASS"
+    # in a source comment, so a page that crashed before reporting would look green.
+    m = re.search(r'<pre id="out">\s*(RESULT: (PASS|FAIL)[^\n<]*)', dom)
+    return (m.group(2), m.group(1)) if m else ("NONE", "page did not report a RESULT")
 
 
 def run_suite(browser, base, name, budget, sandbox):
@@ -57,7 +59,7 @@ def run_suite(browser, base, name, budget, sandbox):
         p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
         v, line = verdict(p.stdout)
         if v != "PASS":                       # show WHY: the page lists each failed check after the RESULT line
-            m = re.search(r"RESULT: (?:FAIL|PASS)[^\n]*\n((?:.+\n){0,25})", p.stdout)
+            m = re.search(r'<pre id="out">[^\n]*\n((?:.+\n){0,25})', p.stdout)
             line += "\n" + (m.group(1) if m else p.stdout[-600:])
         return v, line
     finally:

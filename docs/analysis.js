@@ -121,6 +121,73 @@
     return out;
   }
 
+  /* ------------------------------------------------- sectors / themes
+   * Groups are the exchange's industry (index item `s`) plus the hand-kept
+   * themes (themes.json). A group's number for a period is the equal-weighted
+   * mean (and the median) of its members' returns: market caps are not
+   * published here, so a cap-weighted figure would be invented. */
+  const SECTOR_PERIODS = [1, 5, 20, 60, 120, 240];
+
+  function sectorGroups(index, themes) {
+    const byCode = new Map(index.map((it) => [it.c, it]));
+    const groups = new Map();
+    for (const it of index) {
+      if (!it.s || it.k === "ETF") continue;
+      if (!groups.has("i:" + it.s)) groups.set("i:" + it.s, { key: "i:" + it.s, name: it.s, kind: "industry", codes: [] });
+      groups.get("i:" + it.s).codes.push(it.c);
+    }
+    for (const th of (themes && themes.themes) || []) {
+      const codes = [...new Set((th.codes || []).filter((c) => byCode.has(c)))];
+      if (codes.length) groups.set("t:" + th.name, { key: "t:" + th.name, name: th.name, kind: "theme", codes });
+    }
+    return [...groups.values()];
+  }
+
+  /* One symbol's return over n trading days on the shared date axis: last close
+   * vs the close n bars earlier. null when it did not trade on the last day,
+   * has no close n bars back, or n bars back is before a price discontinuity. */
+  function periodReturn(row, lastIdx, n, minIdx) {
+    const base = lastIdx - n;
+    if (base < 0 || base < (minIdx || 0)) return null;
+    const a = row[lastIdx], b = row[base];
+    return a > 0 && b > 0 ? a / b - 1 : null;
+  }
+
+  /* code -> {1,5,...: return|null}. Day 1 uses the live quote's change when there is one. */
+  function memberReturns(cl, quotes, info, codes, periods) {
+    periods = periods || SECTOR_PERIODS;
+    const lastIdx = cl.d.length - 1, out = {};
+    for (const code of codes || Object.keys(cl.items)) {
+      const row = cl.items[code]; if (!row) continue;
+      const gap = info && info[code] && info[code].gap, q = quotes && quotes[code];
+      let minIdx = 0;
+      if (gap && gap.date) { minIdx = cl.d.findIndex((x) => x >= gap.date); if (minIdx < 0) minIdx = cl.d.length; }
+      const r = {};
+      for (const n of periods) {
+        r[n] = periodReturn(row, lastIdx, n, minIdx);
+        if (n === 1 && q && Number.isFinite(q.pct) && row[lastIdx] > 0) r[n] = q.pct / 100;
+      }
+      out[code] = r;
+    }
+    return out;
+  }
+
+  const medianOf = (a) => { const s = a.slice().sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+
+  /* Per group and period: mean, median, share rising, and how many members had data. */
+  function sectorStats(groups, rets, periods) {
+    periods = periods || SECTOR_PERIODS;
+    return groups.map((g) => {
+      const ret = {};
+      for (const n of periods) {
+        const vals = g.codes.map((c) => rets[c] && rets[c][n]).filter((x) => Number.isFinite(x));
+        ret[n] = vals.length ? { mean: vals.reduce((s, x) => s + x, 0) / vals.length, median: medianOf(vals),
+          up: vals.filter((x) => x > 0).length / vals.length, n: vals.length } : null;
+      }
+      return Object.assign({}, g, { ret });
+    });
+  }
+
   /* ------------------------------------------------- the interactive chart's maths
    * Kept here (not in the page) so it is unit-tested without a browser.
    * A view is {a, b}: bars a .. b-1 are on screen. */
@@ -777,5 +844,5 @@
   root.Analysis = { sma, ema, rsi, macd, vol, clean, weekly, pivots, levels, trend, analyze, riskPct,
     RULES_DEFAULT, normRules, isDefaultRules, SETUP_CHECKS, setupWhy, series, stateAt, snapshot, infoFromCloses,
     setupAt, setupTrades, baselineTrades, setupStats, validateMarket, validationVerdict,
-    bars, weeklyBars, clampView, zoomView, panView, lastView, barInfo, candidates, inScope, splitTerms, rejection, explain, evaluate, evaluateWhy, backtest, backtestReport, STRATS, COST_RT };
+    SECTOR_PERIODS, sectorGroups, periodReturn, memberReturns, sectorStats, bars, weeklyBars, clampView, zoomView, panView, lastView, barInfo, candidates, inScope, splitTerms, rejection, explain, evaluate, evaluateWhy, backtest, backtestReport, STRATS, COST_RT };
 })(typeof window !== "undefined" ? window : globalThis);
