@@ -35,10 +35,55 @@ async function until(fn, ms) { const end = Date.now() + (ms || 15000); while (Da
     for (const k of ["進場價", "停損", "出場目標", "成立原因", "基本因素", "歷史同型態"]) t("card shows " + k, txt.includes(k));
     log.push(txt.replace(/\s+/g, " ").slice(0, 400));
   }
-  /* an empty keyword scan must say so, not invent picks */
+  const passCode = first ? first.querySelector(".sym").textContent.match(/#\d+ (\S+)/)[1] : null;
+
+  /* a keyword that matches nothing says so BY NAME, and invents no picks */
   $("scan-term").value = "zzzz-no-such"; $("scan-run").click();
-  await until(() => /沒有符合/.test($("detail").textContent));
-  t("no match -> says so, no cards", d.querySelectorAll(".card").length === 0 && /沒有符合/.test($("detail").textContent));
+  await until(() => /找不到代號或名稱符合/.test($("detail").textContent));
+  t("keyword matching nothing says so by name, no cards",
+    d.querySelectorAll(".card").length === 0 && /找不到代號或名稱符合「zzzz-no-such」/.test($("detail").textContent), $("detail").textContent.slice(0, 120));
+
+  /* ---- the reported problem: "typed a code, scanned, no result" must say WHY.
+   * The numbers of one real symbol are replaced with ones we control, so the
+   * expected text does not depend on today's market. */
+  const S0 = w.eval("S"), probe = "2330";
+  const keep = [S0.ind[probe], S0.quotes[probe]];
+  const scanDone = () => until(() => !S0.scan.busy && S0.scan.out, 60000);
+  const hot = { close: 100, ma5: 101, ma20: 98, ma60: 90, rsi: 69.5, hist: 0.5, vol_ratio: 1, rows: 480, avg_lots: 2000 };
+  S0.ind[probe] = Object.assign({}, hot); S0.quotes[probe] = { last: 100, vol: 3, live: true };
+  $("scan-scope").value = "all"; $("scan-term").value = probe; $("scan-run").click(); await scanDone();
+  const tx1 = $("detail").textContent;
+  t("typed code that fails: says it did not make the list", /你輸入的 1 檔標的今天都沒有入選/.test(tx1), tx1.slice(0, 160));
+  t("…names the exact rule and number", /RSI 69\.50 高於上限 68/.test(tx1), tx1.slice(0, 220));
+  t("…names the gate", /\(預選\)|（預選）/.test(tx1));
+  t("…does not blame the market ('no opportunities today')", !/沒有機會也是一種結果/.test(tx1));
+  t("…offers 看分析 for that code", !!d.querySelector('ul.why [data-go="ta"][data-code="' + probe + '"]'));
+  t("…and says the analysis tab has no such limits", /分析」分頁不受它們限制/.test(tx1));
+
+  /* the volume rule: a liquid name must not be rejected because TODAY's volume is still tiny */
+  S0.ind[probe] = Object.assign({}, hot, { rsi: 55 });                    // only the odd volume (3 lots today) is left
+  $("scan-run").click(); await scanDone();
+  const tx2 = $("detail").textContent;
+  t("liquid name with tiny volume today is NOT rejected for volume", !/流動性不足|今日累積成交量/.test(tx2), tx2.slice(0, 200));
+  delete S0.ind[probe].avg_lots;                                           // an older indicators.json
+  $("scan-run").click(); await scanDone();
+  t("without avg_lots it falls back to today's volume and says so", /今日累積成交量 3 張/.test($("detail").textContent), $("detail").textContent.slice(0, 200));
+
+  /* a mixed input: one passes, one does not -> cards AND the reason for the other */
+  if (passCode) {
+    S0.ind[probe] = Object.assign({}, hot);
+    $("scan-term").value = passCode + " " + probe; $("scan-run").click(); await scanDone();
+    const txm = $("detail").textContent;
+    const cardCodes = [...d.querySelectorAll(".card .sym")].map((e) => (e.textContent.match(/#\d+ (\S+)/) || [])[1]);
+    t("mixed input: the passing code is listed as a card (and the failing one is not)", cardCodes.includes(passCode) && !cardCodes.includes(probe), cardCodes.join());
+    t("mixed input: the failing code is explained below", /沒入選的與原因/.test(txm) && /RSI 69\.50/.test(txm));
+    d.querySelector('ul.why [data-go="ta"]').click();
+    await until(() => $("v-code") && $("v-code").value === probe);
+    t("看分析 from the explanation opens that code", $("tab-ta").getAttribute("aria-pressed") === "true" && $("v-code").value === probe);
+    $("tab-scan").click();
+  } else log.push("no passing card available for the mixed-input check");
+  S0.ind[probe] = keep[0]; S0.quotes[probe] = keep[1];
+  $("scan-term").value = "";
 
   /* analysis from a card */
   $("scan-term").value = ""; $("scan-run").click();

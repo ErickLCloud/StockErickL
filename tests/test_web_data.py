@@ -150,6 +150,23 @@ def test_process_symbol_without_a_gap_keeps_everything():
     assert len(hist["p"]) == len(hist["d"]) == min(300, bw.HISTORY_DAYS)
 
 
+def test_avg_lots_converts_shares_to_lots_and_survives_missing_data():
+    """The screener's liquidity rule needs 20-day average volume in LOTS."""
+    assert bw.web_indicators({"vol_ma20": 72208886.65, "rows": 487, "date": "d"})["avg_lots"] == 72209
+    assert bw.web_indicators({"vol_ma20": 499_400.0})["avg_lots"] == 499     # just under 500 lots
+    assert bw.web_indicators({"vol_ma20": 500_000.0})["avg_lots"] == 500
+    assert bw.web_indicators({"vol_ma20": None})["avg_lots"] is None
+    assert bw.web_indicators({"vol_ma20": float("nan")})["avg_lots"] is None
+    assert bw.web_indicators({})["avg_lots"] is None
+    assert bw.web_indicators({"vol_ma20": "abc"})["avg_lots"] is None
+    json.dumps(bw.web_indicators({"vol_ma20": 1e6}))
+
+
+def test_process_symbol_carries_average_volume_through():
+    ind, _hist, _gap = bw.process_symbol(_frame([100.0] * 300))       # volume is 1000 shares/day
+    assert ind["avg_lots"] == 1
+
+
 def test_history_window_covers_two_years_so_older_buys_can_be_priced():
     assert bw.HISTORY_DAYS >= 480                       # ~2 trading years
     ind, hist, gap = bw.process_symbol(_frame([100.0] * 600))

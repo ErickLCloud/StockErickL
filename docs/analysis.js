@@ -275,28 +275,83 @@
       shrunk: (wins + 2) / (n + 4) };
   }
 
+  const splitTerms = (s) => (s || "").toLowerCase().split(/[\s,，]+/).filter(Boolean);
+
+  /* Scope and typed keywords only; no indicator rules. */
+  function inScope(it, o, terms) {
+    if (o.scope === "ETF" && it.k !== "ETF") return false;
+    if (o.scope === "STOCK" && it.k === "ETF") return false;
+    if (o.scope === "TWSE" && it.b !== "TWSE") return false;
+    if (o.scope === "TPEx" && it.b === "TWSE") return false;
+    if (terms.length && !terms.some((t) => it.c.toLowerCase().startsWith(t) || (it.n || "").toLowerCase().includes(t))) return false;
+    return true;
+  }
+
+  /* Why this symbol fails the first pass, or null when it passes.
+   *
+   * The rules live HERE and nowhere else: candidates() filters with this and
+   * explain() reports from it, so the reason shown to a user can never
+   * disagree with what the filter actually did.
+   *
+   * Liquidity uses the 20-day AVERAGE volume in lots (d.avg_lots, built from
+   * history). It used to use today's cumulative volume, which is tiny in the
+   * first minutes after the open and made a scan then reject almost
+   * everything. When avg_lots is absent (an older indicators.json) it falls
+   * back to the cumulative figure rather than failing. */
+  function rejection(d, q, o) {
+    q = q || {}; o = o || {};
+    if (!d) return "沒有指標資料（新上市，或歷史資料尚未建置）";
+    if (d.gap) return "價格在 " + d.gap.date + " 出現異常跳空，較早的資料未採用，歷史不足以判斷";
+    if (d.ma60 == null || d.ma20 == null || !(d.close > 0)) return "歷史只有 " + (d.rows || 0) + " 個交易日，算不出 60 日線";
+    const last = q.last > 0 ? q.last : d.close;
+    if (!(last > d.ma20)) return "收盤 " + f2(last) + " 在 20 日線 " + f2(d.ma20) + " 之下（不是多頭回檔）";
+    if (!(d.ma20 > d.ma60)) return "20 日線 " + f2(d.ma20) + " 沒有高於 60 日線 " + f2(d.ma60) + "（中期趨勢不是向上）";
+    if (last > d.ma20 * 1.06) return "收盤高出 20 日線 " + f2((last / d.ma20 - 1) * 100) + "%，超過 6%（太延伸，不追高）";
+    if (d.rsi == null) return "算不出 RSI";
+    if (d.rsi > 68) return "RSI " + f2(d.rsi) + " 高於上限 68（偏熱）";
+    if (d.rsi < 40) return "RSI " + f2(d.rsi) + " 低於下限 40（偏弱）";
+    if (d.hist != null && d.hist <= 0) return "MACD 柱 " + f2(d.hist) + " 不是正的（動能偏弱）";
+    const need = o.minVol == null ? 500 : o.minVol;                           // lots; thin names are untradeable
+    const lots = d.avg_lots != null ? d.avg_lots : (q.vol || 0);
+    if (lots < need) return (d.avg_lots != null ? "近 20 日平均成交量 " : "今日累積成交量 ") +
+      Math.round(lots).toLocaleString("en-US") + " 張，低於 " + need + " 張（流動性不足）";
+    return null;
+  }
+
   /* Cheap first pass over indicators.json for every symbol in scope. */
   function candidates(index, o) {
-    const terms = (o.term || "").toLowerCase().split(/[\s,，]+/).filter(Boolean);
+    const terms = splitTerms(o.term);
     const out = [];
     for (const it of index) {
-      if (o.scope === "ETF" && it.k !== "ETF") continue;
-      if (o.scope === "STOCK" && it.k === "ETF") continue;
-      if (o.scope === "TWSE" && it.b !== "TWSE") continue;
-      if (o.scope === "TPEx" && it.b === "TWSE") continue;
-      if (terms.length && !terms.some((t) => it.c.toLowerCase().startsWith(t) || (it.n || "").toLowerCase().includes(t))) continue;
+      if (!inScope(it, o, terms)) continue;
       const d = (o.ind && o.ind[it.c]) || null, q = (o.quotes && o.quotes[it.c]) || {};
-      if (!d || d.gap || d.ma60 == null || d.ma20 == null || !(d.close > 0)) continue;
+      if (rejection(d, q, o)) continue;
       const last = q.last > 0 ? q.last : d.close;
-      if (!(last > d.ma20 && d.ma20 > d.ma60)) continue;
-      if (last > d.ma20 * 1.06) continue;
-      if (d.rsi == null || d.rsi < 40 || d.rsi > 68) continue;
-      if (d.hist != null && d.hist <= 0) continue;
-      if ((q.vol || 0) < (o.minVol == null ? 500 : o.minVol)) continue;      // lots; thin names are untradeable
       const pull = 1 - clamp((last / d.ma20 - 1) / 0.06, 0, 1);               // closer to MA20 = better entry
       out.push({ it, pre: pull * 2 + clamp(d.vol_ratio || 1, 0, 2) + (d.ma5 > d.ma20 ? 1 : 0) });
     }
     return out.sort((a, b) => b.pre - a.pre);
+  }
+
+  /* For a TYPED keyword: which matching symbols did not pass the first pass,
+   * and why. null when nothing was typed (a whole-market scan has no one
+   * specific to explain). Reasons come from rejection(), so they cannot drift
+   * from the filter. */
+  function explain(index, o, limit) {
+    const terms = splitTerms(o.term);
+    if (!terms.length) return null;
+    limit = limit || 12;
+    const rejected = [];
+    let matched = 0, passed = 0, total = 0;
+    for (const it of index) {
+      if (!inScope(it, o, terms)) continue;
+      matched++;
+      const why = rejection((o.ind && o.ind[it.c]) || null, (o.quotes && o.quotes[it.c]) || {}, o);
+      if (!why) { passed++; continue; }
+      total++;
+      if (rejected.length < limit) rejected.push({ it, reason: why });
+    }
+    return { matched, passed, rejected, more: total - rejected.length };
   }
 
   function fundText(it, f) {
@@ -312,15 +367,20 @@
     return { text: bits.join("、"), bonus };
   }
 
-  /* Full evaluation of one candidate against its own history. Null = reject. */
-  function evaluate(it, h, q, d, f) {
+  /* Full evaluation of one candidate against its own history.
+   * Returns {r, reason}: r is the result, or null with `reason` saying which
+   * check rejected it. evaluate() below keeps the old null-on-reject contract. */
+  function evaluateWhy(it, h, q, d, f) {
+    const no = (reason) => ({ r: null, reason });
     const c = clean(h, d && d.gap);
-    if (!c || c.p.length < 100) return null;
+    if (!c) return no("載入不到這檔的歷史資料");
+    if (c.p.length < 100) return no("歷史只有 " + c.p.length + " 個交易日，細查至少需要 100 個");
     const p = c.p.slice();
     const an = analyze({ d: c.d, p });
-    if (!an || an.verdict === "賣出") return null;
+    if (!an) return no("歷史資料不足以分析");
+    if (an.verdict === "賣出") return no("日週線綜合判斷為「賣出」（評分 " + f2(an.total) + "）");
     const a = { p, ma20: an.ma20, ma60: an.ma60, rsi: an.rsi, macd: an.macd };
-    if (!setupAt(a, p.length - 1)) return null;
+    if (!setupAt(a, p.length - 1)) return no("用完整歷史重算後，最新一天不符合多頭回檔型態（與預選的指標略有差異）");
     const st = setupStats(p, it.k);
     const entry = q && q.last > 0 ? q.last : p[p.length - 1], risk = riskPct(p);
     const stop = entry * (1 - risk), target = entry * (1 + 2 * risk);
@@ -333,10 +393,12 @@
       "%，20 日線在 60 日線上方且上彎，RSI " + f2(an.rsi[p.length - 1]) + "，MACD 柱為正");
     const score = an.total + (st.shrunk - 0.5) * 10 + fu.bonus - (blocked ? 2 : 0);
     const pull = Math.max(entry * 0.97, Math.min(entry, an.ma20[p.length - 1] * 1.01));
-    return { code: it.c, name: it.n, kind: it.k, entry, pullback: entry - pull > entry * 0.01 ? pull : null,
+    return { r: { code: it.c, name: it.n, kind: it.k, entry, pullback: entry - pull > entry * 0.01 ? pull : null,
       stop, target, risk, rr: 2, support: sup ? sup.price : null, resist: res ? res.price : null, blocked,
-      stats: st, fund: fu.text, reasons, verdict: an.verdict, total: an.total, score };
+      stats: st, fund: fu.text, reasons, verdict: an.verdict, total: an.total, score }, reason: null };
   }
+
+  function evaluate(it, h, q, d, f) { return evaluateWhy(it, h, q, d, f).r; }
 
   /* ---------------------------------------------------------------- backtest */
   const STRATS = {
@@ -463,5 +525,5 @@
   const fpf = (v) => v == null ? "—" : v === Infinity ? "∞" : v.toFixed(2);
 
   root.Analysis = { sma, ema, rsi, macd, vol, clean, weekly, pivots, levels, trend, analyze, riskPct,
-    setupAt, setupStats, candidates, evaluate, backtest, backtestReport, STRATS, COST_RT };
+    setupAt, setupStats, candidates, rejection, explain, evaluate, evaluateWhy, backtest, backtestReport, STRATS, COST_RT };
 })(typeof window !== "undefined" ? window : globalThis);

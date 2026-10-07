@@ -283,6 +283,15 @@ def web_indicators(raw):
         except (TypeError, ValueError):
             f = None
         out[k] = None if f is None or f != f else round(f, 2)
+    # 20-day average daily volume in LOTS (1 lot = 1,000 shares; yfinance gives
+    # shares). The stock screener's liquidity rule uses this, not today's
+    # cumulative volume: that figure is tiny in the first minutes of the
+    # session, which made a scan right after the open reject nearly everything.
+    vma = raw.get("vol_ma20")
+    try:
+        out["avg_lots"] = None if vma is None or vma != vma else int(round(float(vma) / 1000))
+    except (TypeError, ValueError):
+        out["avg_lots"] = None
     out["rows"] = int(raw["rows"]) if raw.get("rows") is not None else None
     out["date"] = str(raw["date"]) if raw.get("date") is not None else None
     return out

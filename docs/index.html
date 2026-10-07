@@ -171,6 +171,8 @@
     box-shadow:var(--shadow); border-left:4px solid var(--accent)}
   .card .cell{background:var(--soft)}
   .card ul,.reasons{margin:8px 0 0; padding-left:18px; font-size:13px; line-height:1.75}
+  ul.why{margin:10px 0 0; padding-left:18px; font-size:13.5px; line-height:1.9}
+  ul.why li{margin:4px 0}
   .verdict{display:inline-block; font-weight:700; padding:3px 18px; border-radius:999px; color:#fff; font-size:16px; letter-spacing:.2em}
   .verdict.buy{background:#d6453a} .verdict.sell{background:#12915f} .verdict.hold{background:#7b8f85}
   .legend{display:flex; flex-wrap:wrap; gap:4px 14px; font-size:12px; color:var(--muted); margin:4px 0 2px}
@@ -506,28 +508,80 @@ function needHist(){
 async function runScan(){
   const sc = S.scan;
   sc.scope = $("scan-scope").value; sc.term = $("scan-term").value.trim();
-  sc.busy = true; sc.out = null; paintScan();
-  const cands = A.candidates(S.index, {scope: sc.scope, term: sc.term, ind: S.ind, quotes: S.quotes});
-  const top = cands.slice(0, 30);
-  await Promise.all(top.map((c) => loadHist(c.it.c)));
-  const found = [];
-  for(const {it} of top){
-    const r = A.evaluate(it, S.hist[it.c], S.quotes[it.c], S.ind[it.c], S.fund[it.c]);
-    if(r) found.push(r);
+  sc.busy = true; sc.out = null; sc.prog = "預選中…"; paintScan();
+  const tick = () => new Promise((r) => setTimeout(r, 0));   // let the browser repaint the progress text
+  try{
+    await tick();
+    const scanOpts = {scope: sc.scope, term: sc.term, ind: S.ind, quotes: S.quotes};
+    const cands = A.candidates(S.index, scanOpts);
+    /* For a typed code: which matches were dropped by the first pass, and why. */
+    const why = A.explain(S.index, scanOpts);
+    const top = cands.slice(0, 30);
+    const found = [], drops = [];
+    let done = 0;
+    /* 6 fetches at a time, each capped at 15s, so one stalled file cannot hang the scan. */
+    const queue = top.slice();
+    const worker = async () => {
+      while(queue.length){
+        const {it} = queue.shift();
+        await Promise.race([loadHist(it.c), new Promise((r) => setTimeout(r, 15000))]);
+        done++; sc.prog = "載入歷史 " + done + " / " + top.length;
+        if(S.view === "scan") paintScan();
+      }
+    };
+    await Promise.all(Array.from({length: Math.min(6, top.length)}, worker));
+    for(const {it} of top){
+      try{
+        const x = A.evaluateWhy(it, S.hist[it.c], S.quotes[it.c], S.ind[it.c], S.fund[it.c]);
+        if(x.r) found.push(x.r); else drops.push({it, reason: x.reason});
+      }catch(e){
+        console.error("scan evaluate failed for " + it.c, e);
+        drops.push({it, reason: "檢驗時發生錯誤（詳見瀏覽器主控台）"});
+      }
+      if(S.hist[it.c] === undefined) S.hist[it.c] = null;     // timed-out fetch: don't leave "loading" state
+    }
+    found.sort((a, b) => b.score - a.score);
+    /* The second-gate drops are only worth showing when the user named something specific. */
+    sc.out = {pre: cands.length, checked: top.length, items: found.slice(0, 5), why, drops: why ? drops : []};
+  }catch(e){
+    console.error("scan failed", e);
+    sc.out = {pre: 0, checked: 0, items: [], err: String(e && e.message || e)};
+  }finally{
+    sc.busy = false;
+    if(S.view === "scan") paintScan();
   }
-  found.sort((a, b) => b.score - a.score);
-  sc.out = {pre: cands.length, checked: top.length, items: found.slice(0, 5)};
-  sc.busy = false;
-  if(S.view === "scan") paintScan();
+}
+
+/* Why the symbols the user typed did not make the list. Reasons come from the
+ * same rules that did the filtering (Analysis.rejection / evaluateWhy), so they
+ * cannot disagree with it. */
+function whyBlock(o, term){
+  const w = o.why;
+  if(!w) return "";                                   // nothing typed: a market-wide scan has no one to explain
+  if(!w.matched)
+    return '<div class="empty">找不到代號或名稱符合「' + esc(term) + '」的標的。請確認代號，或把「範圍」改成「全部」。</div>';
+  const rows = w.rejected.map((x) => ({it: x.it, gate: "預選", reason: x.reason}))
+    .concat((o.drops || []).map((x) => ({it: x.it, gate: "細查", reason: x.reason})));
+  if(!rows.length) return "";
+  return '<div class="sub" style="margin-top:16px">你輸入的標的裡，沒入選的與原因</div><ul class="why">' +
+    rows.map((x) => '<li><strong>' + esc(x.it.c) + ' ' + esc(x.it.n || "") + '</strong>（' + x.gate + '）' + esc(x.reason) +
+      ' <button class="act" data-go="ta" data-code="' + esc(x.it.c) + '">看分析</button></li>').join("") + '</ul>' +
+    (w.more > 0 ? '<div class="note">另有 ' + w.more + ' 檔也沒入選，請輸入更精確的代號來看原因。</div>' : "") +
+    '<div class="note">這些條件只用來「找出現在適合進場的型態」；<strong>「分析」分頁不受它們限制，任何代號都能看。</strong></div>';
 }
 
 function paintScan(){
   const sc = S.scan, o = sc.out;
   let body = "";
-  if(sc.busy) body = '<div class="empty">掃描中…（預選後逐檔載入歷史並檢驗）</div>';
+  if(sc.busy) body = '<div class="empty">掃描中…（' + esc(sc.prog || "預選後逐檔載入歷史並檢驗") + '）</div>';
   else if(o){
-    if(!o.items.length)
-      body = '<div class="empty">今天在這個範圍內沒有符合條件的標的（預選 ' + o.pre + ' 檔、細查 ' + o.checked +
+    if(o.err) body = '<div class="empty">掃描失敗：' + esc(o.err) + '（詳見瀏覽器主控台）</div>';
+    else if(!o.items.length && o.why && o.why.matched)
+      body = '<div class="empty">你輸入的 ' + o.why.matched + ' 檔標的今天都沒有入選。</div>' + whyBlock(o, sc.term);
+    else if(!o.items.length && o.why)
+      body = whyBlock(o, sc.term);
+    else if(!o.items.length)
+      body ='<div class="empty">今天在這個範圍內沒有符合條件的標的（預選 ' + o.pre + ' 檔、細查 ' + o.checked +
         ' 檔）。沒有機會也是一種結果，不必硬湊 5 檔。</div>';
     else body = '<div class="count">範圍內預選 ' + o.pre + ' 檔，細查前 ' + o.checked + ' 檔，列出 ' + o.items.length +
         ' 檔' + (o.items.length < 5 ? '（符合條件的不足 5 檔，不硬湊）' : '') + '。依「日週線評分＋本檔歷史勝率＋基本面」排序。</div>' +
@@ -550,7 +604,7 @@ function paintScan(){
             cell("下方支撐", r.support ? n2(r.support) : "—") + '</div>' +
           '<div class="sub">基本因素：' + esc(r.fund) + '</div>' +
           '<div class="sub" style="margin-bottom:0">成立原因</div><ul>' + r.reasons.map((t) => '<li>' + esc(t) + '</li>').join("") + '</ul></div>';
-      }).join("");
+      }).join("") + whyBlock(o, sc.term);
   }else body = '<div class="empty">設定範圍後按「掃描」。</div>';
   $("detail").innerHTML = '<div class="pad"><div class="head"><span class="sym">搜尋潛力股</span>' +
     '<span class="tag">多頭回檔型態</span></div>' +

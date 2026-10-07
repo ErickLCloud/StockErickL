@@ -98,6 +98,99 @@ t("levels: supports below, resistances above the last close",
   aU.levels.supports.every((l) => l.price < aU.last) && aU.levels.resistances.every((l) => l.price > aU.last));
 t("analyze needs at least 30 bars", A.analyze({ d: noisy.d.slice(0, 10), p: noisy.p.slice(0, 10) }) === null);
 
+/* ---- first-pass rules: one failing rule at a time, and what the user is told */
+const goodD = { close: 100, ma5: 101, ma20: 98, ma60: 90, rsi: 55, hist: 0.5, vol_ratio: 1, rows: 480, avg_lots: 2000 };
+const goodQ = { last: 100, vol: 5000 };
+const rj = (d, q, o) => A.rejection(Object.assign({}, goodD, d), Object.assign({}, goodQ, q), o);
+const has = (s, ...bits) => typeof s === "string" && bits.every((b) => s.includes(b));
+t("a clean setup passes", rj({}, {}) === null, rj({}, {}));
+t("no indicators at all is explained", has(A.rejection(null, {}, {}), "沒有指標資料"));
+t("a price gap is explained with its date", has(A.rejection(Object.assign({}, goodD, { gap: { date: "2025-04-07", ratio: 1.5 } }), goodQ, {}), "2025-04-07", "異常跳空"));
+t("too little history for MA60 says how much there is", has(A.rejection(Object.assign({}, goodD, { ma60: null, rows: 41 }), goodQ, {}), "41", "60 日線"));
+t("below MA20", has(rj({}, { last: 97 }), "97.00", "20 日線", "之下"), rj({}, { last: 97 }));
+t("MA20 not above MA60", has(rj({ ma20: 89, ma60: 90 }, { last: 100 }), "沒有高於 60 日線"), rj({ ma20: 89 }, {}));
+t("6% above MA20 passes, just over is refused", rj({}, { last: 98 * 1.06 }) === null && has(rj({}, { last: 98 * 1.06 + 0.1 }), "超過 6%"));
+t("RSI 68 passes (boundary), 68.57 is refused as too hot", rj({ rsi: 68 }, {}) === null && has(rj({ rsi: 68.57 }, {}), "68.57", "高於上限 68"), rj({ rsi: 68.57 }, {}));
+t("RSI 40 passes (boundary), 39.9 is refused as too weak", rj({ rsi: 40 }, {}) === null && has(rj({ rsi: 39.9 }, {}), "低於下限 40"));
+t("missing RSI is refused, not crashed", has(rj({ rsi: null }, {}), "RSI"));
+t("MACD histogram 0 is refused, tiny positive passes", has(rj({ hist: 0 }, {}), "MACD 柱") && rj({ hist: 0.01 }, {}) === null);
+t("a missing MACD histogram does not block (as before)", rj({ hist: null }, {}) === null);
+t("20-day average volume 499 lots is refused, 500 passes",
+  has(rj({ avg_lots: 499 }, {}), "近 20 日平均成交量", "499", "500") && rj({ avg_lots: 500 }, {}) === null);
+t("THE FIX: a liquid name is not rejected because today's volume is still tiny (just after the open)",
+  rj({ avg_lots: 2000 }, { vol: 3 }) === null && rj({ avg_lots: 2000 }, { vol: 0 }) === null);
+const noAvg = { avg_lots: undefined };
+t("an old indicators.json without avg_lots falls back to today's cumulative volume, and says so",
+  has(rj(noAvg, { vol: 3 }), "今日累積成交量", "3 張") && rj(noAvg, { vol: 600 }) === null);
+t("only the FIRST failing rule is reported, in a fixed order (trend before RSI before volume)",
+  has(rj({ rsi: 99, avg_lots: 1 }, { last: 90 }), "之下") && has(rj({ rsi: 99, avg_lots: 1 }, {}), "RSI"));
+t("minVol option is honoured", rj({ avg_lots: 800 }, {}, { minVol: 1000 }) !== null && rj({ avg_lots: 800 }, {}, { minVol: 700 }) === null);
+
+/* ---- explain(): what to tell someone who typed a specific code */
+const ix = [{ c: "2330", n: "台積電", k: "STOCK", b: "TWSE" }, { c: "2317", n: "鴻海", k: "STOCK", b: "TWSE" },
+  { c: "0050", n: "元大台灣50", k: "ETF", b: "TWSE" }, { c: "6488", n: "環球晶", k: "STOCK", b: "TPEX" }];
+const idm = { "2330": Object.assign({}, goodD, { rsi: 68.57 }), "2317": goodD, "0050": Object.assign({}, goodD, { hist: -1 }), "6488": goodD };
+const qm = { "2330": goodQ, "2317": goodQ, "0050": goodQ, "6488": goodQ };
+const ex = (term, o) => A.explain(ix, Object.assign({ scope: "all", term, ind: idm, quotes: qm }, o || {}));
+t("explain: a typed code that fails says exactly why", (() => { const e = ex("2330"); return e.matched === 1 && e.passed === 0 && e.rejected.length === 1 && e.rejected[0].it.c === "2330" && has(e.rejected[0].reason, "RSI 68.57", "68"); })());
+t("explain: a typed code that passes is counted as passed, not listed", (() => { const e = ex("2317"); return e.matched === 1 && e.passed === 1 && e.rejected.length === 0; })());
+t("explain: several keywords, mixed outcomes", (() => { const e = ex("2317 2330"); return e.matched === 2 && e.passed === 1 && e.rejected.length === 1; })());
+t("explain: nothing typed means nothing to explain (null)", ex("") === null && ex("   ") === null);
+t("explain: a keyword matching nothing says matched 0", (() => { const e = ex("zzzz"); return e.matched === 0 && e.rejected.length === 0; })());
+t("explain: matches by name too", ex("台積").matched === 1 && ex("台積").rejected[0].it.c === "2330");
+t("explain: respects the scope", ex("00", { scope: "STOCK" }).matched === 0 && ex("00", { scope: "ETF" }).matched === 1);
+t("explain: the list is capped and reports how many more", (() => { const e = A.explain(ix, { scope: "all", term: "2 0 6", ind: { "2330": null, "2317": null, "0050": null, "6488": null }, quotes: {} }, 2); return e.rejected.length === 2 && e.more === e.matched - e.passed - 2 && e.more >= 1; })());
+
+/* the reason shown must never disagree with the filter: same rules, one place */
+(() => {
+  let s = 99, bad = 0;
+  const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  const items = Array.from({ length: 300 }, (_, i) => ({ c: "T" + i, n: "n" + i, k: i % 3 ? "STOCK" : "ETF", b: "TWSE" }));
+  const I = {}, Q = {};
+  /* Start from a symbol that PASSES, then with probability 0.55 give it exactly
+   * one defect. (A purely random generator produced 0 passes, which made the
+   * "keeps exactly what rejection() passes" half of this test vacuous.) */
+  const defects = [
+    (d, q) => { q.last = d.ma20 * 0.95; },                               // below MA20
+    (d) => { d.ma60 = d.ma20 * 1.05; },                                   // MA20 under MA60
+    (d, q) => { q.last = d.ma20 * 1.10; },                                // over-extended
+    (d) => { d.rsi = 75; }, (d) => { d.rsi = 30; }, (d) => { d.rsi = null; },
+    (d) => { d.hist = -0.5; }, (d) => { d.hist = null; },                 // null hist is allowed: a pass
+    (d) => { d.avg_lots = 100; }, (d, q) => { d.avg_lots = undefined; q.vol = 10; },
+    (d) => { d.gap = { date: "2025-01-01", ratio: 2 }; },
+    (d) => { d.ma60 = null; },
+  ];
+  let defective = 0;
+  for (const it of items) {
+    const ma60 = 50 + r() * 50, ma20 = ma60 * (1.02 + r() * 0.1);
+    const d = { close: ma20 * (1 + r() * 0.04), ma20, ma60, ma5: ma20, rsi: 42 + r() * 24, hist: 0.1 + r(), vol_ratio: r() * 3,
+      rows: 100 + Math.floor(r() * 400), avg_lots: 600 + Math.floor(r() * 5000) };
+    const q = { last: d.close, vol: 600 + Math.floor(r() * 3000) };
+    if (r() < 0.05) { I[it.c] = null; Q[it.c] = q; defective++; continue; }   // no indicators at all
+    if (r() < 0.55) { defects[Math.floor(r() * defects.length)](d, q); defective++; }
+    I[it.c] = d; Q[it.c] = q;
+  }
+  const kept = new Set(A.candidates(items, { scope: "all", term: "", ind: I, quotes: Q }).map((c) => c.it.c));
+  for (const it of items) if ((A.rejection(I[it.c], Q[it.c], {}) === null) !== kept.has(it.c)) bad++;
+  const e = A.explain(items, { scope: "all", term: "t", ind: I, quotes: Q }, 1000);
+  t("property: the sample is not degenerate (some pass, some fail)", kept.size > 60 && kept.size < 260, kept.size + " of 300 pass");
+  t("property: candidates() keeps exactly the symbols rejection() passes (300 random symbols)", bad === 0, bad + " disagree");
+  t("property: explain() lists exactly the symbols candidates() dropped", e.passed === kept.size && e.rejected.length === items.length - kept.size, e.passed + "/" + kept.size);
+  t("property: every explained rejection has a non-empty reason", e.rejected.every((x) => typeof x.reason === "string" && x.reason.length > 4));
+  log.push("property check: " + kept.size + " of 300 random symbols pass the first pass");
+})();
+
+/* ---- evaluateWhy(): the second gate says why too, and evaluate() is unchanged */
+const itE = { c: "T1", n: "測試", k: "STOCK", b: "TWSE" };
+t("evaluateWhy: no history file", (() => { const x = A.evaluateWhy(itE, null, {}, {}, null); return x.r === null && has(x.reason, "歷史"); })());
+t("evaluateWhy: short history says how short", (() => { const x = A.evaluateWhy(itE, { d: upH.d.slice(0, 50), p: upH.p.slice(0, 50) }, {}, {}, null); return x.r === null && has(x.reason, "50", "100"); })());
+t("evaluateWhy: a falling stock is rejected WITH a reason", (() => { const x = A.evaluateWhy(itE, dnH, { last: dnH.p[299] }, {}, null); return x.r === null && typeof x.reason === "string" && x.reason.length > 4; })());
+t("evaluateWhy: result and reason are never both set or both empty", [upH, dnH, { d: upH.d.slice(0, 50), p: upH.p.slice(0, 50) }, null].every((h) => {
+  const x = A.evaluateWhy(itE, h, { last: h ? h.p[h.p.length - 1] : 0 }, {}, null); return (x.r === null) !== (x.reason === null); }));
+t("evaluate() still returns exactly evaluateWhy().r (the old contract)", [upH, dnH, null].every((h) => {
+  const q = { last: h ? h.p[h.p.length - 1] : 0 };
+  return JSON.stringify(A.evaluate(itE, h, q, {}, null)) === JSON.stringify(A.evaluateWhy(itE, h, q, {}, null).r); }));
+
 /* ---- real data: end to end over every file the page would use */
 async function real() {
   const j = async (p) => (await fetch(p)).json();
