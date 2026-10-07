@@ -11,6 +11,7 @@
  * Look for "RESULT: PASS". */
 const fails = [], log = []; let n = 0;
 function t(name, ok, detail) { n++; if (!ok) fails.push(name + (detail !== undefined ? " -> " + detail : "")); }
+const sign2 = (v) => (v > 0 ? "+" : "") + Number(v).toFixed(2);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(fn, ms) { const end = Date.now() + (ms || 15000); while (Date.now() < end) { const v = fn(); if (v) return v; await sleep(100); } return null; }
 
@@ -320,6 +321,47 @@ async function until(fn, ms) { const end = Date.now() + (ms || 15000); while (Da
     await until(() => $("tab-ta").getAttribute("aria-pressed") === "true");
     t("the link opens the analysis of that member", $("tab-ta").getAttribute("aria-pressed") === "true");
     t("no NaN/undefined anywhere in the sector view", (() => { $("tab-sector").click(); return !/NaN|undefined|Infinity/.test($("detail").textContent); })());
+  }
+
+  /* ---- home tab */
+  {
+    const Sx = w.eval("S");
+    $("tab-home").click(); await sleep(100);
+    t("home tab shows the three boxes and the index card", d.querySelectorAll(".home-box").length === 3 && !!d.querySelector(".idxcard"));
+    const stocks = (board) => Sx.index.filter((i) => i.k !== "ETF" && i.b === board).map((i) => ({ i, q: Sx.quotes[i.c] })).filter((x) => x.q && x.q.pct != null && x.q.last > 0);
+    let rows = stocks("TWSE");
+    const bars = [...d.querySelectorAll(".dist > div")].map((x) => +x.querySelector("b").textContent);
+    t("distribution: 9 buckets that add up to every listed stock with a quote", bars.length === 9 && bars.reduce((a, b) => a + b, 0) === rows.length, bars.join() + " vs " + rows.length);
+    t("…limit-up bucket equals an independent count (pct >= 9.5)", bars[0] === rows.filter((x) => x.q.pct >= 9.5).length && bars[8] === rows.filter((x) => x.q.pct <= -9.5).length);
+    const up = rows.filter((x) => x.q.pct > 0).length, dn = rows.filter((x) => x.q.pct < 0).length;
+    const ratioTxt = d.querySelector(".home-box .ratio").parentElement.textContent.replace(/\s+/g, "");
+    t("up/down counts equal an independent count", ratioTxt.includes("漲跌家數比" + up + "（") && ratioTxt.includes(":" + dn + "（"), ratioTxt.slice(0, 80));
+    const hotRows = () => [...d.querySelectorAll(".hotrow[data-home-open]")];
+    const maxPct = Math.max(...rows.map((x) => x.q.pct));
+    t("hot list: 10 rows, first is the biggest gainer", hotRows().length === 10 && hotRows()[0].textContent.includes(sign2(maxPct)), hotRows()[0] && hotRows()[0].textContent);
+    d.querySelector('[data-home-hot="vol"]').click();
+    const maxVol = Math.max(...rows.map((x) => x.q.vol || 0));
+    t("volume ranking: first row has the largest volume", hotRows()[0].textContent.replace(/,/g, "").includes(String(maxVol)), hotRows()[0].textContent + " vs " + maxVol);
+    const secNames = [...d.querySelectorAll(".hbar > span:first-child")].map((x) => x.textContent);
+    const sizeOf = (nm) => rows.filter((x) => x.i.s === nm).length;
+    t("sector bars only list industries with >= 5 stocks quoted today", secNames.length === 0 || secNames.every((nm) => sizeOf(nm) >= 5), secNames.join());
+    d.querySelector('[data-home-lead="down"]').click();
+    const downNames = [...d.querySelectorAll(".hbar b")].map((x) => parseFloat(x.textContent));
+    t("laggards are sorted most-negative first", downNames.every((v, i) => i === 0 || downNames[i - 1] <= v), downNames.join());
+    d.querySelector('[data-home-board="TPEX"]').click();
+    rows = stocks("TPEX");
+    t("switching to OTC recounts: the tag shows OTC stock count", d.querySelector(".head .tag").textContent.includes("上櫃 " + rows.length + " 檔"), d.querySelector(".head .tag").textContent);
+    const first = d.querySelector(".hotrow[data-home-open]").dataset.homeOpen;
+    d.querySelector(".hotrow[data-home-open]").click(); await sleep(150);
+    t("clicking a hot stock opens its detail", Sx.sel === first && Sx.view === "market", Sx.sel + " " + Sx.view);
+    const mk0 = Sx.market;
+    Sx.market = Object.assign({}, mk0, { otc: { date: "2026-10-07", close: 430.46, chg: -0.4, pct: -0.09 } });
+    $("tab-home").click(); await sleep(100);
+    const cards = [...d.querySelectorAll(".idxcard")].map((x) => x.textContent.replace(/\s+/g, ""));
+    t("home shows the OTC index card next to TAIEX when market.json has it", cards.length === 2 && cards[1].includes("櫃買指數") && cards[1].includes("430.46") && cards[1].includes("-0.40") && cards[1].includes("-0.09%") && cards[1].includes("2026-10-07"), cards.join(" | "));
+    Sx.market = mk0; $("tab-home").click();
+    t("without otc in market.json only TAIEX shows (no broken card)", d.querySelectorAll(".idxcard").length === 1);
+    t("no NaN/undefined in the home view", (() => { $("tab-home").click(); return !/NaN|undefined|Infinity/.test($("detail").textContent); })());
   }
 
   /* views left alone still work */

@@ -1267,13 +1267,15 @@ function paintHome(){
   const chip = (attr, val, label, on) => '<button class="chip" ' + attr + '="' + val + '" aria-pressed="' + on + '">' + label + '</button>';
   const boardChips = '<span>' + chip("data-home-board", "TWSE", "上市", h.board === "TWSE") + chip("data-home-board", "TPEX", "上櫃", h.board === "TPEX") + '</span>';
 
+  const idxCard = (name, x, note) => '<div class="idxcard"><span class="flat" style="font-size:13px">' + name + '</span><span class="v ' + cls(x.chg) + '">' + n2(x.close) + '</span><span class="' + cls(x.chg) + '">' +
+    sign(x.chg) + ' (' + sign(x.pct) + '%)</span>' + (note ? '<span class="flat" style="font-size:11.5px">' + note + '</span>' : "") + '</div>';
   const idx = mk && mk.close != null
-    ? '<div class="idxcard"><span class="flat" style="font-size:13px">加權指數</span><span class="v ' + cls(mk.chg) + '">' + n2(mk.close) + '</span><span class="' + cls(mk.chg) + '">' + sign(mk.chg) + ' (' + sign(mk.pct) + '%)</span></div>'
+    ? idxCard("加權指數", mk) + (mk.otc ? idxCard("櫃買指數", mk.otc, esc(mk.otc.date) + " 盤後") : "")
     : '<div class="empty">指數資料尚未載入。</div>';
 
   const by = {};
   for(const {it, q} of rows) if(it.s) (by[it.s] = by[it.s] || []).push(q.pct);
-  const secs = Object.entries(by).filter(([, a]) => a.length >= 2).map(([name, a]) => ({name, v: a.reduce((x, y) => x + y, 0) / a.length}));
+  const secs = Object.entries(by).filter(([, a]) => a.length >= SEC_MIN).map(([name, a]) => ({name, v: a.reduce((x, y) => x + y, 0) / a.length}));
   secs.sort((a, b) => h.lead === "up" ? b.v - a.v : a.v - b.v);
   const top = secs.slice(0, 5), mx = Math.max(0.01, ...top.map((x) => Math.abs(x.v)));
   const secHtml = secs.length ? top.map((x) => '<div class="hbar"><span>' + esc(x.name) + '</span><span><i class="' + cls(x.v) + '" style="width:' +
@@ -1286,7 +1288,7 @@ function paintHome(){
   const dist = '<div class="dist">' + HOME_BUCKETS.map(([label, , c, a], i) => '<div><b>' + counts[i] + '</b><span class="b" style="height:' +
     Math.max(2, counts[i] / cmax * 100) + '%;background:' + (c === "flat" ? "var(--flat)" : "var(--" + c + ")") + ';opacity:' + a + '"></span><span class="flat">' + label + '</span></div>').join("") + '</div>' +
     '<div class="ratio"><span style="width:' + pc(nUp) + '%;background:var(--up)"></span><span style="width:' + pc(nFl) + '%;background:var(--flat)"></span><span style="width:' + pc(nDn) + '%;background:var(--down)"></span></div>' +
-    '<div class="sub" style="margin-top:6px">漲跌家數比 <b class="up">' + nUp + '（' + pc(nUp) + '%）</b> : <b class="down">' + nDn + '（' + pc(nDn) + '%）</b></div>';
+    '<div style="margin-top:8px;font-size:13.5px">漲跌家數比 <b class="up">' + nUp + '（' + pc(nUp) + '%）</b> : <b class="down">' + nDn + '（' + pc(nDn) + '%）</b></div>';
 
   const hot = rows.filter(({q}) => h.hot === "pct" ? true : q.vol > 0).slice().sort((a, b) => h.hot === "pct" ? b.q.pct - a.q.pct : (b.q.vol || 0) - (a.q.vol || 0)).slice(0, 10);
   const hotHtml = '<div class="hotrow flat"><span>股票</span><span>成交價</span><span>漲跌幅</span><span>成交量</span></div>' + hot.map(({it, q}) =>
@@ -1295,12 +1297,12 @@ function paintHome(){
 
   $("detail").innerHTML = '<div class="pad"><div class="head"><span class="sym">首頁</span><span class="tag">' + (h.board === "TWSE" ? "上市" : "上櫃") + ' ' + rows.length + ' 檔個股</span>' + boardChips + '</div>' +
     '<h3 style="margin:14px 0 0;font-size:15px">主要指數行情</h3><div class="idxcards">' + idx + '</div>' +
-    '<div class="note">目前只有加權指數；櫃買、期貨、美股指數沒有可直接取用的公開資料源，需另行加入。</div>' +
+    '<div class="note">目前有加權與櫃買指數（櫃買為櫃買中心盤後資料）；期貨、美股指數沒有可直接取用的公開資料源，需另行加入。</div>' +
     '<div class="home-grid">' +
     '<div class="home-box"><h3>產業類股<span>' + chip("data-home-lead", "up", "領漲", h.lead === "up") + chip("data-home-lead", "down", "領跌", h.lead === "down") + '</span></h3>' + secHtml + '</div>' +
     '<div class="home-box"><h3>個股漲跌分布</h3>' + dist + '</div>' +
     '<div class="home-box"><h3>熱門股<span>' + chip("data-home-hot", "pct", "漲幅排行", h.hot === "pct") + chip("data-home-hot", "vol", "成交量排行", h.hot === "vol") + '</span></h3>' + hotHtml + '</div>' +
-    '</div><div class="note">產業類股為該板個股今日漲跌的等權平均；熱門股是依最近一次報價（約每 5 分鐘更新）排序的漲幅／成交量排行，不是逐筆的「瞬間」爆量。個股不含 ETF。</div>' + DISCLAIMER + '</div>';
+    '</div><div class="note">產業類股為該板個股今日漲跌的等權平均（成分股至少 5 檔才列入）；熱門股是依最近一次報價（約每 5 分鐘更新）排序的漲幅／成交量排行，不是逐筆的「瞬間」爆量。個股不含 ETF。</div>' + DISCLAIMER + '</div>';
 }
 
 /* ---- 4. backtest */

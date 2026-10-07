@@ -368,3 +368,33 @@ def test_parse_industries_reads_both_exchanges_and_skips_unnamed_codes():
 def test_parse_industries_survives_junk_and_empty_input():
     assert bw.parse_industries(None, []) == {}
     assert bw.parse_industries([{"公司代號": None, "產業別": None}, {}], [{}]) == {}
+
+
+# ------------------------------------------------------- OTC (櫃買) index
+
+def test_parse_tpex_index_takes_the_latest_session_and_computes_pct_against_the_previous_close():
+    rows = [{"Date": "20261006", "Close": "430.86", "Change": "-1.62"}, {"Date": "20261007", "Close": "430.46", "Change": "-0.40"},
+            {"Date": "20261005", "Close": "432.48", "Change": "5.55"}]               # unordered on purpose
+    got = bw.parse_tpex_index(rows)
+    assert got["date"] == "2026-10-07" and got["close"] == 430.46 and got["chg"] == -0.40
+    assert got["pct"] == round(-0.40 / 430.86 * 100, 2)                                 # previous close = 430.46 + 0.40
+
+
+def test_parse_tpex_index_survives_junk():
+    assert bw.parse_tpex_index(None) is None and bw.parse_tpex_index([]) is None
+    assert bw.parse_tpex_index([{"Date": "20261007", "Close": "--", "Change": "x"}, {}, {"Date": "20261007", "Close": "0", "Change": "0"}]) is None
+
+
+def test_the_otc_index_is_optional_in_market_json(monkeypatch):
+    import src.market
+    monkeypatch.setattr(src.market, "parse_market_summary", lambda rows: {"name": "TAIEX", "close": 20000.0, "change": 10.0, "change_pct": 0.05})
+
+    def down(url):
+        if url == bw.TPEX_INDEX:
+            raise RuntimeError("down")
+        return []
+    m = bw.build_market(fetch=down)
+    assert m["close"] == 20000.0 and "otc" not in m                     # a failing OTC fetch never breaks TAIEX
+
+    ok = bw.build_market(fetch=lambda url: [{"Date": "20261007", "Close": "430.46", "Change": "-0.40"}] if url == bw.TPEX_INDEX else [])
+    assert ok["otc"]["close"] == 430.46 and ok["close"] == 20000.0

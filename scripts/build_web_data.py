@@ -225,6 +225,29 @@ def quote_item(live, base):
     return {k: v for k, v in q.items() if v is not None and v is not False or k == "live"}
 
 
+TPEX_INDEX = "https://www.tpex.org.tw/openapi/v1/tpex_index"
+
+
+def parse_tpex_index(rows):
+    """The OTC (櫃買) index from TPEx's daily table (last few sessions, one row
+    each): {date, close, chg, pct}. pct is against the previous close, which is
+    close - change. None when the table is empty or unreadable."""
+    best = None
+    for r in rows or []:
+        try:
+            d, close, chg = str(r["Date"]), float(r["Close"]), float(r["Change"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if close > 0 and (best is None or d > best[0]):
+            best = (d, close, chg)
+    if best is None:
+        return None
+    d, close, chg = best
+    prev = close - chg
+    return {"date": f"{d[:4]}-{d[4:6]}-{d[6:8]}", "close": round(close, 2), "chg": round(chg, 2),
+            "pct": round(chg / prev * 100, 2) if prev > 0 else None}
+
+
 def build_market(fetch=None):
     """TAIEX. The exact-name match (the payload also carries the total-return
     index at ~2.3x the level) lives in src.market and is tested there; reuse it
@@ -237,8 +260,15 @@ def build_market(fetch=None):
         return {"updated": stamp(), "error": str(exc)[:120]}
     if m is None:
         return {"updated": stamp(), "error": "TAIEX row absent"}
-    return {"updated": stamp(), "name": m["name"], "close": m["close"],
-            "chg": m["change"], "pct": m["change_pct"]}
+    out = {"updated": stamp(), "name": m["name"], "close": m["close"],
+           "chg": m["change"], "pct": m["change_pct"]}
+    try:                                   # the OTC index must never take the TAIEX down with it
+        otc = parse_tpex_index(fetch(TPEX_INDEX))
+        if otc:
+            out["otc"] = otc
+    except Exception:
+        pass
+    return out
 
 
 def write_json(path, obj):
