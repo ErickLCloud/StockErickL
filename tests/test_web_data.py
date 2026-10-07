@@ -398,3 +398,39 @@ def test_the_otc_index_is_optional_in_market_json(monkeypatch):
 
     ok = bw.build_market(fetch=lambda url: [{"Date": "20261007", "Close": "430.46", "Change": "-0.40"}] if url == bw.TPEX_INDEX else [])
     assert ok["otc"]["close"] == 430.46 and ok["close"] == 20000.0
+
+
+# ------------------------------------------------------------------ events
+
+def test_roc_to_iso():
+    assert bw.roc_to_iso("1151008") == "2026-10-08" and bw.roc_to_iso("991231") == "2010-12-31"
+    for bad in (None, "", "abc", "1151340", "11510", "11510081", "1150230"):
+        assert bw.roc_to_iso(bad) is None, bad
+
+
+def test_parse_ex_events_reads_both_exchanges_drops_past_and_junk_and_sorts():
+    twse = [{"Date": "1151008", "Code": "00400A", "Exdividend": "息", "CashDividend": "0.120000", "StockDividendRatio": ""},
+            {"Date": "1151001", "Code": "2330", "Exdividend": "息", "CashDividend": "5.0"},                    # past
+            {"Date": "1151015", "Code": "1101", "Exdividend": "權息", "CashDividend": "1.5", "StockDividendRatio": "0.05"}]
+    tpex = [{"ExRrightsExDividendDate": "1151007", "SecuritiesCompanyCode": "8440", "ExRrightsExDividend": "除息",
+             "CashDividend": "0.35000000", "StockDividendRatio": "0.00000000"}, {}, {"ExRrightsExDividendDate": "xx", "SecuritiesCompanyCode": "1"}]
+    got = bw.parse_ex_events(twse, tpex, "2026-10-07")
+    assert [(e["c"], e["d"], e["k"]) for e in got] == [("8440", "2026-10-07", "除息"), ("00400A", "2026-10-08", "除息"), ("1101", "2026-10-15", "除權息")]
+    assert got[0]["cash"] == 0.35 and got[0]["stock"] is False and got[2]["stock"] is True and got[2]["cash"] == 1.5
+
+
+def test_parse_meetings_keeps_upcoming_and_tells_regular_from_extraordinary():
+    row = lambda code, d, kind: {"公司代號": code, "開會日期": d, "股東常(臨時)會": kind, "是否採電子投票": "強制"}
+    got = bw.parse_meetings([row("1101", "1151013", "臨時會"), row("2330", "1150610", "常會")], [row("1240", "1151105", "常會"), {}], "2026-10-07")
+    assert [(e["c"], e["d"], e["k"]) for e in got] == [("1101", "2026-10-13", "臨時會"), ("1240", "2026-11-05", "常會")]
+
+
+def test_build_events_names_a_failed_source_and_still_writes(tmp_path):
+    def fetch(url):
+        if url == bw.TPEX_AGM:
+            raise RuntimeError("down")
+        return [{"Date": "1151008", "Code": "2330", "Exdividend": "息", "CashDividend": "6"}] if url == bw.TWSE_EXPRE else []
+    ev = bw.build_events(tmp_path, fetch=fetch, today="2026-10-07")
+    assert ev["errors"] == ["tpex_agm"] and len(ev["ex"]) == 1
+    saved = json.loads((tmp_path / "events.json").read_text(encoding="utf-8"))
+    assert saved["ex"][0]["c"] == "2330" and saved["errors"] == ["tpex_agm"]

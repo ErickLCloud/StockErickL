@@ -364,6 +364,36 @@ async function until(fn, ms) { const end = Date.now() + (ms || 15000); while (Da
     t("no NaN/undefined in the home view", (() => { $("tab-home").click(); return !/NaN|undefined|Infinity/.test($("detail").textContent); })());
   }
 
+  /* ---- holdings events */
+  {
+    const Sx = w.eval("S"), Cx = w.Calc, today = Cx.taipeiToday();
+    const plus = (n) => new Date(Date.parse(today + "T00:00:00Z") + n * 86400000).toISOString().slice(0, 10);
+    const keepLots = Sx.lots, keepEv = Sx.events, keepDays = Sx.evDays;
+    const c1 = Sx.index.find((i) => i.k === "STOCK").c, c2 = Sx.index.find((i) => i.k === "ETF").c;
+    Sx.lots = [{ id: "e1", code: c1, date: "2025-03-01", shares: 2000, cost: 10, note: "" }, { id: "e2", code: c2, date: "2025-03-01", shares: 1000, cost: 10, note: "" }];
+    Sx.evDays = 30;
+    Sx.events = { updated: "x", errors: [], ex: [{ c: c1, d: plus(3), k: "除息", cash: 2.5, stock: false }, { c: c2, d: plus(20), k: "除息", cash: 0.1, stock: false }], agm: [{ c: c1, d: plus(9), k: "常會", e: "強制" }] };
+    $("tab-hold").click(); await sleep(150);
+    const evt = () => [...d.querySelectorAll("#evtable tbody tr")].map((r) => r.textContent.replace(/\s+/g, " "));
+    t("holdings view shows an events table", evt().length >= 3, evt().join(" | "));
+    t("the ex-dividend row gives the estimate from the held shares (2,000 x 2.5 = 5,000)", evt().some((x) => x.includes("除息") && x.includes("預估約 5,000 元")), evt().join(" | "));
+    t("the meeting row is there", evt().some((x) => x.includes("股東會") && x.includes("常會")));
+    t("the dated events are in date order", (() => { const ds = [...d.querySelectorAll("#evtable tbody tr")].map((r) => r.children[0].textContent); return ds.every((x, i) => i === 0 || ds[i - 1] <= x); })());
+    t("each holding with a dated event soon carries a small tag in the lot table", d.querySelector("#lottable").textContent.includes("除息 " + plus(3).slice(5)), d.querySelector("#lottable").textContent.slice(0, 160));
+    d.querySelector('[data-ev-days="14"]').click(); await sleep(100);
+    t("14-day window drops the event 20 days out and keeps the near ones", !evt().some((x) => x.includes(plus(20).slice(5) + " ")) && evt().some((x) => x.includes("除息")), evt().join(" | "));
+    d.querySelector('[data-ev-days="60"]').click(); await sleep(100);
+    t("60-day window adds the filing deadline", evt().some((x) => x.includes("財報")));
+    Sx.events = null; d.querySelector('[data-ev-days="30"]').click(); await sleep(100);
+    t("without events data the page says so and still shows the rule rows", /事件資料還沒載入/.test($("evarea").textContent) && evt().some((x) => x.includes("月營收")));
+    Sx.events = { updated: "x", errors: ["tpex_agm"], ex: [], agm: [] }; d.querySelector('[data-ev-days="30"]').click(); await sleep(100);
+    t("a failed source is named instead of silently showing nothing", /tpex_agm/.test($("evarea").textContent));
+    Sx.lots = []; $("tab-market").click(); $("tab-hold").click(); await sleep(100);
+    t("no holdings: no events panel at all", !$("evtable") && $("evarea").textContent.trim() === "");
+    Sx.lots = keepLots; Sx.events = keepEv; Sx.evDays = keepDays;
+    $("tab-market").click();
+  }
+
   /* views left alone still work */
   $("tab-hold").click(); t("holdings tab still works", !!$("lotform"));
   $("tab-market").click(); t("market tab still works", /技術指標|從左邊選一檔/.test($("detail").textContent));

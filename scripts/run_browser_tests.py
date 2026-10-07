@@ -56,7 +56,10 @@ def run_suite(browser, base, name, budget, sandbox):
                f"{base}/tests/web/{name}"]
         if not sandbox:
             cmd.insert(1, "--no-sandbox")
-        p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+        except subprocess.TimeoutExpired:
+            return "NONE", "the browser did not finish within 300 s"
         v, line = verdict(p.stdout)
         if v != "PASS":                       # show WHY: the page lists each failed check after the RESULT line
             m = re.search(r'<pre id="out">[^\n]*\n((?:.+\n){0,25})', p.stdout)

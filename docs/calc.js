@@ -188,6 +188,66 @@
     return { lots, rejected };
   }
 
-  root.Calc = { isoDays, validISO, taipeiToday, priceOnOrBefore, dividendsFor, lotMetrics, totals, ageMinutes,
+  /* ------------------------------------------------------------ upcoming events for the holdings
+   * Two kinds. DATED events the exchanges publish (ex-dividend, shareholders' meetings: data/events.json)
+   * and RULE events that recur on a fixed day (monthly revenue by the 10th, the statutory filing deadlines). */
+  const pad2 = (n) => String(n).padStart(2, "0");
+
+  /* The first date on or after `today` whose day-of-month is `day`. */
+  function nextMonthDay(today, day) {
+    let [y, m, d] = today.split("-").map(Number);
+    if (d > day) { m += 1; if (m > 12) { m = 1; y += 1; } }
+    return y + "-" + pad2(m) + "-" + pad2(day);
+  }
+  const nextRevenueDeadline = (today) => nextMonthDay(today, 10);
+
+  /* Statutory filing deadlines for ordinary companies: annual 3/31, Q1 5/15, Q2 (half-year) 8/14, Q3 11/14. */
+  const REPORT_DEADLINES = [[3, 31, "年報"], [5, 15, "第一季財報"], [8, 14, "第二季（半年）財報"], [11, 14, "第三季財報"]];
+  function nextReportDeadline(today) {
+    const y = Number(today.slice(0, 4));
+    for (const yy of [y, y + 1])
+      for (const [m, d, label] of REPORT_DEADLINES) {
+        const iso = yy + "-" + pad2(m) + "-" + pad2(d);
+        if (iso >= today) return { date: iso, label };
+      }
+    return null;
+  }
+
+  /* opts: { lots, kindOf(code) -> "ETF"|"STOCK"|undefined, events: {ex, agm} | null, today, days }.
+   * Returns rows sorted by date: { date, days, type, codes, details: {code: text}, text }. */
+  function upcomingEvents(opts) {
+    const { lots, kindOf, events, today } = opts, horizon = opts.days == null ? 30 : opts.days;
+    const rows = [], held = [...new Set(lots.map((l) => l.code))];
+    const within = (iso) => { const n = isoDays(today, iso); return n >= 0 && n <= horizon ? n : null; };
+    const money0 = (v) => Math.round(v).toLocaleString("en-US");
+    if (events) {
+      for (const e of events.ex || []) {
+        if (!held.includes(e.c)) continue;
+        const n = within(e.d); if (n === null) continue;
+        const sh = lots.filter((l) => l.code === e.c && l.date < e.d).reduce((a, l) => a + l.shares, 0);   // bought BEFORE the ex-date
+        if (sh <= 0) continue;
+        const bits = [];
+        if (e.cash) bits.push("每股現金 " + e.cash + " 元，持有 " + money0(sh) + " 股預估約 " + money0(e.cash * sh) + " 元（稅前）");
+        if (e.stock) bits.push("另有配股");
+        rows.push({ date: e.d, days: n, type: e.k, codes: [e.c], details: { [e.c]: bits.join("；") || "詳見公告" }, text: bits.join("；") || "詳見公告" });
+      }
+      for (const e of events.agm || []) {
+        if (!held.includes(e.c)) continue;
+        const n = within(e.d); if (n === null) continue;
+        const t = e.k + (e.e ? "（電子投票：" + e.e + "）" : "");
+        rows.push({ date: e.d, days: n, type: "股東會", codes: [e.c], details: { [e.c]: t }, text: t });
+      }
+    }
+    const stocks = held.filter((c) => kindOf(c) === "STOCK");
+    if (stocks.length) {
+      const rv = nextRevenueDeadline(today), rn = within(rv);
+      if (rn !== null) rows.push({ date: rv, days: rn, type: "月營收", codes: stocks, details: {}, text: "上月營收公告截止（每月 10 日前）" });
+      const rp = nextReportDeadline(today), pn = rp && within(rp.date);
+      if (rp && pn !== null) rows.push({ date: rp.date, days: pn, type: "財報", codes: stocks, details: {}, text: rp.label + "法定公告截止（一般公司；金融業另有規定）" });
+    }
+    return rows.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : a.type < b.type ? -1 : 1);
+  }
+
+  root.Calc = { nextMonthDay, nextRevenueDeadline, nextReportDeadline, upcomingEvents, REPORT_DEADLINES, isoDays, validISO, taipeiToday, priceOnOrBefore, dividendsFor, lotMetrics, totals, ageMinutes,
                 filterItems, sortItems, parseLots };
 })(typeof window !== "undefined" ? window : globalThis);

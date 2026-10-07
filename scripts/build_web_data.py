@@ -278,6 +278,81 @@ def write_json(path, obj):
                     encoding="utf-8")
 
 
+# ------------------------------------------------------------------ events
+# Per-company dated events the exchanges publish in advance: ex-dividend / ex-rights
+# dates and shareholders' meetings. (Monthly revenue and filing deadlines are rules,
+# computed in the page; investor-conference dates have no open-data feed.)
+TWSE_EXPRE = "https://openapi.twse.com.tw/v1/exchangeReport/TWT48U_ALL"
+TPEX_EXPRE = "https://www.tpex.org.tw/openapi/v1/tpex_exright_prepost"
+TWSE_AGM = "https://openapi.twse.com.tw/v1/opendata/t187ap41_L"
+TPEX_AGM = "https://www.tpex.org.tw/openapi/v1/t187ap41_O"
+
+
+def roc_to_iso(s):
+    """'1151008' (ROC year 115) -> '2026-10-08'. None for anything else."""
+    t = str(s or "").strip()
+    if not t.isdigit() or len(t) not in (6, 7):
+        return None
+    y, m, d = int(t[:-4]) + 1911, int(t[-4:-2]), int(t[-2:])
+    try:
+        return datetime(y, m, d).strftime("%Y-%m-%d")
+    except ValueError:
+        return None
+
+
+_EX_KIND = {"息": "除息", "權": "除權", "權息": "除權息", "除息": "除息", "除權": "除權", "除權息": "除權息"}
+
+
+def parse_ex_events(twse_rows, tpex_rows, today):
+    """Upcoming ex-dividend / ex-rights dates: [{c, d, k, cash, stock}] sorted by date.
+    cash = cash dividend per share (None when not stated); stock = True when shares are also distributed."""
+    out = []
+    for rows, f_date, f_code, f_kind in ((twse_rows, "Date", "Code", "Exdividend"),
+                                         (tpex_rows, "ExRrightsExDividendDate", "SecuritiesCompanyCode", "ExRrightsExDividend")):
+        for r in rows or []:
+            d, code = roc_to_iso(r.get(f_date)), str(r.get(f_code) or "").strip()
+            if not d or not code or d < today:
+                continue
+            cash = num(r.get("CashDividend"), 6)
+            stock = num(r.get("StockDividendRatio"), 6)
+            out.append({"c": code, "d": d, "k": _EX_KIND.get(str(r.get(f_kind) or "").strip(), "除息" if cash else "除權"),
+                        "cash": cash if cash and cash > 0 else None, "stock": bool(stock and stock > 0)})
+    out.sort(key=lambda e: (e["d"], e["c"]))
+    return out
+
+
+def parse_meetings(twse_rows, tpex_rows, today):
+    """Upcoming shareholders' meetings: [{c, d, k ('常會'|'臨時會'), e (e-voting)}] sorted by date."""
+    out = []
+    for rows in (twse_rows, tpex_rows):
+        for r in rows or []:
+            d, code = roc_to_iso(r.get("開會日期")), str(r.get("公司代號") or "").strip()
+            if not d or not code or d < today:
+                continue
+            kind = "臨時會" if "臨時" in str(r.get("股東常(臨時)會") or "") else "常會"
+            out.append({"c": code, "d": d, "k": kind, "e": str(r.get("是否採電子投票") or "").strip()})
+    out.sort(key=lambda e: (e["d"], e["c"]))
+    return out
+
+
+def build_events(out, fetch=None, today=None):
+    """events.json. A source that fails is named in `errors` and its list is left empty, so the
+    page can say what is missing instead of silently showing no events."""
+    fetch = fetch or fetch_json
+    today = today or datetime.now(TAIPEI).strftime("%Y-%m-%d")
+    got, errors = {}, []
+    for name, url in (("twse_ex", TWSE_EXPRE), ("tpex_ex", TPEX_EXPRE), ("twse_agm", TWSE_AGM), ("tpex_agm", TPEX_AGM)):
+        try:
+            got[name] = fetch(url)
+        except Exception:
+            got[name] = []
+            errors.append(name)
+    ev = {"updated": stamp(), "ex": parse_ex_events(got["twse_ex"], got["tpex_ex"], today),
+          "agm": parse_meetings(got["twse_agm"], got["tpex_agm"], today), "errors": errors}
+    write_json(Path(out) / "events.json", ev)
+    return ev
+
+
 def build_quotes(out):
     out = Path(out)
     uni = fetch_universe()
@@ -307,9 +382,14 @@ def build_quotes(out):
         "failed_batches": failed, "items": items})
     market = build_market()
     write_json(out / "market.json", market)
+    try:
+        events = build_events(out)
+    except Exception:
+        events = {"ex": [], "agm": [], "errors": ["all"]}       # never block the price refresh
     return {"symbols": len(uni), "live": sum(1 for q in items.values() if q.get("live")),
             "failed_batches": len(failed), "fundamentals": len(fund),
-            "market_ok": "error" not in market}
+            "market_ok": "error" not in market,
+            "events": len(events["ex"]) + len(events["agm"]), "event_errors": events["errors"]}
 
 
 def _try(url):

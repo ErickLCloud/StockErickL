@@ -188,6 +188,7 @@
   .verdict{display:inline-block; font-weight:700; padding:3px 18px; border-radius:999px; color:#fff; font-size:16px; letter-spacing:.2em}
   .verdict.buy{background:#d6453a} .verdict.sell{background:#12915f} .verdict.hold{background:#7b8f85}
   [hidden]{display:none !important}
+  #evtable td,#evtable th{padding:7px 8px} #evtable .tag{white-space:nowrap}
   .seccards{display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px}
   @media (max-width:640px){ .seccards{grid-template-columns:1fr} }
   .seccard{background:var(--soft); border-radius:10px; padding:10px 14px}
@@ -310,7 +311,7 @@ const store = {
 };
 
 const S = {
-  index:[], byCode:{}, quotes:{}, quotesUpdated:null, ind:{}, fund:{}, meta:null, market:null,
+  index:[], byCode:{}, events:null, evDays:30, quotes:{}, quotesUpdated:null, ind:{}, fund:{}, meta:null, market:null,
   sel:null, view:"home", home:{board:"TWSE", lead:"up", hot:"pct"}, type:"all", pick:"all", sort:"code", range:250, hist:{},
   watch:new Set(store.get(KEY_WATCH, [])), lots:store.get(KEY_LOTS, []),
   scan:{scope:"all", term:"", busy:false, out:null, list:null, watchOnly:false, sort:{k:"pre", dir:-1}},
@@ -380,8 +381,9 @@ async function boot(){
       '直接以 file:// 開啟會被瀏覽器擋下。</div>';
     return;
   }
-  const [ind, fund, mk, meta] = await Promise.all(
-    [opt("data/indicators.json"), opt("data/fundamental.json"), opt("data/market.json"), opt("data/meta.json")]);
+  const [ind, fund, mk, meta, evs] = await Promise.all(
+    [opt("data/indicators.json"), opt("data/fundamental.json"), opt("data/market.json"), opt("data/meta.json"), opt("data/events.json")]);
+  S.events = evs;
   S.ind = (ind && ind.items) || {};
   S.fund = (fund && fund.items) || {};
   S.market = mk; S.meta = meta;
@@ -397,8 +399,10 @@ async function boot(){
 
 async function refresh(){
   try{
-    const [q, mk] = await Promise.all([getJSON("data/quotes.json", true),
-                                       getJSON("data/market.json", true).catch(() => S.market)]);
+    const [q, mk, evs] = await Promise.all([getJSON("data/quotes.json", true),
+                                       getJSON("data/market.json", true).catch(() => S.market),
+                                       getJSON("data/events.json", true).catch(() => S.events)]);
+    S.events = evs;
     if(q.updated !== (S.quotesUpdated && S.quotesUpdated.updated)){
       S.quotes = q.items || {}; S.quotesUpdated = q; S.market = mk;
       render();
@@ -1385,6 +1389,27 @@ function toggleWatch(code){
 /* ------------------------------------------------------------ holdings */
 /* The holdings TABLE, on its own so it can be refreshed (new quotes, a symbol's
  * history arriving with its dividends) without wiping a half-typed form. */
+/* Upcoming events for what is held: dated ones from data/events.json, plus the recurring deadlines. */
+function holdingEvents(days){
+  return C.upcomingEvents({lots: S.lots, kindOf: (c) => S.byCode[c] && S.byCode[c].k, events: S.events, today: C.taipeiToday(), days});
+}
+function eventsHtml(){
+  if(!S.lots.length) return "";
+  const days = S.evDays, rows = holdingEvents(days);
+  const chip = (d) => '<button class="chip" data-ev-days="' + d + '" aria-pressed="' + (days === d) + '">' + d + ' 天內</button>';
+  const nm = (c) => esc(c) + ' ' + esc((S.byCode[c] || {}).n || "");
+  const body = rows.length ? '<div class="scroll"><table id="evtable"><thead><tr><th>日期</th><th>還有</th><th class="l">事件</th><th class="l">持倉</th><th class="l">說明</th></tr></thead><tbody>' +
+    rows.map((r) => '<tr><td>' + esc(r.date.slice(5)) + '</td><td>' + (r.days === 0 ? "今天" : r.days + " 天") + '</td><td class="l"><span class="tag">' + esc(r.type) + '</span></td>' +
+      '<td class="l">' + (r.codes.length > 3 ? r.codes.slice(0, 3).map(nm).join("、") + ' 等 ' + r.codes.length + ' 檔' : r.codes.map(nm).join("、")) + '</td>' +
+      '<td class="l">' + esc(r.text) + '</td></tr>').join("") + '</tbody></table></div>'
+    : '<div class="empty" style="padding:18px">這段期間沒有已公告的事件。</div>';
+  const missing = !S.events ? '<div class="alert">事件資料還沒載入（要等網站下一次更新），目前只顯示固定日期的規則事件。</div>'
+    : (S.events.errors && S.events.errors.length ? '<div class="alert">有 ' + S.events.errors.length + ' 個資料來源這次沒抓到（' + esc(S.events.errors.join("、")) + '），事件可能不完整。</div>' : "");
+  return '<div class="sub" style="margin-top:16px">持倉事件（未來 ' + days + ' 天）</div><div class="chbar">' + [14, 30, 60].map(chip).join("") + '</div>' + missing + body +
+    '<div class="note">除權息與股東會來自證交所、櫃買中心的公告（只列你<strong>買入日早於除權息日</strong>的持倉；預估股息未扣稅與補充保費）。' +
+    '月營收與財報是<strong>固定規則</strong>算出的截止日，不是各公司實際公告日；<strong>法說會日期沒有公開資料來源，這裡沒有。</strong></div>';
+}
+
 function lotAreaHtml(){
   const today = C.taipeiToday();
   const rows = S.lots.map((l) => {
@@ -1394,6 +1419,9 @@ function lotAreaHtml(){
   });
   if(!rows.length) return '<div class="empty">還沒有持倉。上方填入代號、買入日、股數與成本價即可。</div>';
   const tot = C.totals(rows.map((r) => r.m));
+  const evChips = {};                                               // a small tag under each holding that has a dated event soon
+  for(const r of holdingEvents(30)) for(const c of r.codes) if(r.details[c] !== undefined)
+    evChips[c] = (evChips[c] || "") + '<span class="tag" title="' + esc(r.details[c]) + '">' + esc(r.type) + " " + esc(r.date.slice(5)) + '</span> ';
   const body = rows.map(({l, q, m}) => {
     const it = S.byCode[l.code], known = m.div != null;
     const mark = known ? "" : "‡";                                    // dividends unknown: the figure is price-only
@@ -1402,6 +1430,7 @@ function lotAreaHtml(){
      * pushed off-screen whenever the table was wider than its panel. */
     return '<tr><td><button class="del" data-del="' + esc(l.id) + '" title="刪除" aria-label="刪除這筆">✕</button> ' +
       esc(l.code) + ' ' + esc(it ? it.n : "（不在清單中）") +
+      (evChips[l.code] ? '<br>' + evChips[l.code] : "") +
       (l.note ? '<br><span style="color:var(--muted);font-size:12px">' + esc(l.note) + '</span>' : "") + '</td>' +
       '<td>' + esc(l.date) + '</td><td>' + money(l.shares) + '</td><td>' + n2(l.cost) + '</td>' +
       '<td>' + n2(q.last) + (q.live === false || q.last == null ? ' <span class="flat" title="無盤中報價，顯示最後收盤">·</span>' : "") + '</td>' +
@@ -1424,7 +1453,7 @@ function lotAreaHtml(){
     (tot.divUnknown ? '<div class="note">‡ 這幾筆的股息資料尚未載入或查不到，這幾筆的總損益<strong>只含價差</strong>。</div>' : "");
 }
 
-function refreshLotArea(){ const a = $("lotarea"); if(a) a.innerHTML = lotAreaHtml(); }
+function refreshLotArea(){ const a = $("lotarea"); if(a) a.innerHTML = lotAreaHtml(); const e = $("evarea"); if(e) e.innerHTML = eventsHtml(); }
 
 /* Dividends live in each symbol's history file; fetch the ones the lots need, then refresh only the table. */
 function loadLotHistories(){
@@ -1446,6 +1475,7 @@ function paintHoldings(prefill){
       '<div><button class="btn" type="submit">新增</button></div></form>' +
     '<div class="hint" id="f-hint"></div>' +
     '<div class="msg" id="lotmsg"></div>' +
+    '<div id="evarea">' + eventsHtml() + '</div>' +
     '<div id="lotarea">' + lotAreaHtml() + '</div>' +
     '<div class="tools"><button class="btn ghost" id="h-export">匯出</button>' +
       '<button class="btn ghost" id="h-import">匯入</button>' +
@@ -1616,6 +1646,8 @@ $("detail").addEventListener("click", (e) => {
   if(st){ S.sec.stat = st.dataset.secStat; paintSector(); return; }
   if(ss){ const k = ss.dataset.secSort, kk = k === "name" || k === "n" ? k : +k; S.sec.dir = S.sec.sort === kk ? -S.sec.dir : (kk === "name" ? 1 : -1); S.sec.sort = kk; paintSector(); return; }
   if(so2 && !t.closest("[data-go]")){ S.sec.open = S.sec.open === so2.dataset.secOpen ? null : so2.dataset.secOpen; paintSector(); return; }
+  const evd = t.closest("[data-ev-days]");
+  if(evd){ S.evDays = +evd.dataset.evDays; refreshLotArea(); return; }
   if(t.closest("#scan-run")){ runScan(); return; }
   const ws = t.closest("[data-wstar]");
   if(ws){ toggleWatch(ws.dataset.wstar); paintScanTable(); return; }
