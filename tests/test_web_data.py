@@ -1,6 +1,7 @@
 """Tests for scripts/build_web_data.py. Fixtures only; no network."""
 
 import json
+from datetime import datetime
 
 import pandas as pd
 import pytest
@@ -434,3 +435,78 @@ def test_build_events_names_a_failed_source_and_still_writes(tmp_path):
     assert ev["errors"] == ["tpex_agm"] and len(ev["ex"]) == 1
     saved = json.loads((tmp_path / "events.json").read_text(encoding="utf-8"))
     assert saved["ex"][0]["c"] == "2330" and saved["errors"] == ["tpex_agm"]
+
+
+# ------------------------------------------------------- global indices / TAIEX futures
+
+def _yahoo(price=51521.28, prev=51267.9, closes=None, t=1791319357):
+    return {"chart": {"result": [{"meta": {"regularMarketPrice": price, "chartPreviousClose": prev, "regularMarketTime": t},
+                                  "indicators": {"quote": [{"close": closes if closes is not None else [51300.0, None, 51400.5, 51521.28]}]}}]}}
+
+
+def test_parse_yahoo_chart_change_time_and_spark():
+    g = bw.parse_yahoo_chart(_yahoo())
+    assert g["price"] == 51521.28 and g["chg"] == round(51521.28 - 51267.9, 2) and g["pct"] == round((51521.28 / 51267.9 - 1) * 100, 2)
+    assert g["spark"] == [51300.0, 51400.5, 51521.28]                         # gaps (None) dropped
+    assert g["time"] == datetime.fromtimestamp(1791319357, bw.TAIPEI).strftime("%Y-%m-%d %H:%M")
+
+
+def test_parse_yahoo_chart_caps_the_spark_and_keeps_the_last_point():
+    g = bw.parse_yahoo_chart(_yahoo(closes=[float(i) for i in range(1, 300)]))
+    assert len(g["spark"]) == bw.SPARK_POINTS and g["spark"][0] == 1.0 and g["spark"][-1] == 299.0
+
+
+def test_parse_yahoo_chart_rejects_junk():
+    for bad in ({}, {"chart": {"result": []}}, _yahoo(price=0), _yahoo(prev=None), {"chart": {"result": [{"meta": {}}]}}):
+        assert bw.parse_yahoo_chart(bad) is None
+    assert bw.parse_yahoo_chart(_yahoo(closes=[1.0]))["spark"] is None          # one point is not a line
+
+
+def _taifex(rows):
+    return {"RtData": {"QuoteList": rows}}
+
+
+def test_parse_taifex_picks_the_first_traded_contract_of_the_session_and_skips_spot():
+    rows = [{"SymbolID": "TXF-S", "CLastPrice": "49806.37", "CDiff": "-16.18", "CDiffRate": "-0.03", "CDate": "20261007", "CTime": "133315"},
+            {"SymbolID": "TXFJ6-F", "CLastPrice": "49979.00", "CDiff": "-103.00", "CDiffRate": "-0.21", "CDate": "20261007", "CTime": "134500"},
+            {"SymbolID": "TXFK6-F", "CLastPrice": "50143.00", "CDiff": "-149.00", "CDiffRate": "-0.30", "CDate": "20261007", "CTime": "134400"}]
+    g = bw.parse_taifex(_taifex(rows), "-F")
+    assert (g["contract"], g["price"], g["chg"], g["pct"], g["time"]) == ("TXFJ6-F", 49979.0, -103.0, -0.21, "2026-10-07 13:45")
+    night = [{"SymbolID": "TXF-P", "CLastPrice": "", "CDiff": "0.00"}, {"SymbolID": "TXFJ6-M", "CLastPrice": "49804.00", "CDiff": "-164.00", "CDiffRate": "-0.33", "CDate": "20261007", "CTime": "164456"}]
+    assert bw.parse_taifex(_taifex(night), "-M")["contract"] == "TXFJ6-M"
+    assert bw.parse_taifex(_taifex(night), "-F") is None and bw.parse_taifex({}, "-F") is None
+
+
+def test_build_globals_drops_a_failing_source_and_names_it(tmp_path):
+    def fetch(url):
+        if "%5ESOX" in url:
+            raise RuntimeError("down")
+        return _yahoo()
+    def post(url, body):
+        if body["MarketType"] == "1":
+            return _taifex([])
+        return _taifex([{"SymbolID": "TXFJ6-F", "CLastPrice": "49979", "CDiff": "-103", "CDiffRate": "-0.21", "CDate": "20261007", "CTime": "134500"}])
+    g = bw.build_globals(tmp_path, fetch=fetch, post=post)
+    assert [i["key"] for i in g["items"]] == ["txf", "dji", "ixic", "spx"]
+    assert g["errors"] == ["txf_night", "sox"]
+    assert json.loads((tmp_path / "globals.json").read_text(encoding="utf-8"))["items"][0]["name"] == "台指期"
+
+
+# ------------------------------------------------------------------ news
+
+def test_pick_news_newest_first_dedupes_titles_and_keeps_only_web_links():
+    items = [{"title": "A", "link": "https://x/a", "published_at": "2026-10-07T01:00:00Z", "publisher": "P1"},
+             {"title": "B", "link": "https://x/b", "published_at": "2026-10-07T03:00:00Z", "publisher": None},
+             {"title": "A", "link": "https://x/a2", "published_at": "2026-10-07T02:00:00Z"},
+             {"title": "C", "link": "javascript:alert(1)", "published_at": "2026-10-07T04:00:00Z"},
+             {"title": "", "link": "https://x/e", "published_at": "2026-10-07T05:00:00Z"}]
+    got = bw.pick_news(items)
+    assert [(g["t"], g["l"]) for g in got] == [("B", "https://x/b"), ("A", "https://x/a2")]
+    assert bw.pick_news([{"title": str(i), "link": "https://x/" + str(i), "published_at": "2026-10-07T00:00:%02dZ" % i} for i in range(40)], limit=5)[0]["t"] == "39"
+
+
+def test_build_news_names_an_empty_group_and_still_writes(tmp_path):
+    n = bw.build_news(tmp_path, fetch_news=lambda q: [] if q == "美股" else [{"title": "T", "link": "https://x", "published_at": "2026-10-07T00:00:00Z"}])
+    assert n["errors"] == ["us"] and n["groups"]["tw"][0]["t"] == "T"
+    assert json.loads((tmp_path / "news.json").read_text(encoding="utf-8"))["groups"]["us"] == []
+

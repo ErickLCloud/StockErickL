@@ -39,41 +39,45 @@
   button{font:inherit; color:inherit}
   .num,.big,.v,td,.px,.pct,.taiex{font-family:var(--font-num)}
 
-  /* ---- shell: fixed sidebar + content */
-  .shell{display:grid; grid-template-columns:292px 1fr; gap:26px; max-width:1320px; margin:0 auto; padding:18px 18px 40px}
-  @media (max-width:1000px){ .shell{grid-template-columns:1fr; gap:14px} }
-  .side{position:sticky; top:14px; align-self:start; display:flex; flex-direction:column; gap:14px}
-  @media (max-width:1000px){ .side{position:static} }
+  /* ---- shell: a sticky top bar, then full-width content.
+   * It used to be a 292px sidebar, which left the wide tables (類股, 選股, 首頁) about 1000px. */
+  .shell{max-width:1320px; margin:0 auto; padding:0 18px 40px}
+  .side{position:sticky; top:0; z-index:20; display:flex; flex-wrap:wrap; align-items:center; gap:6px 18px;
+    margin:0 -18px 16px; padding:8px 18px 6px; background:var(--panel); box-shadow:var(--shadow)}
   .wrap{min-width:0}
 
-  .brand{text-align:center; padding:6px 4px 0}
-  .brand svg{width:58px; height:58px}
-  .brand h1{margin:6px 0 0; font-size:25px; font-weight:700; color:var(--accent); letter-spacing:.14em}
-  .brand .en{font-family:var(--font-num); font-size:10.5px; letter-spacing:.24em; color:var(--accent); margin-top:-2px}
-  .brand p{margin:8px 0 0; font-size:11.5px; color:var(--muted); letter-spacing:.06em}
+  .brand{display:flex; align-items:center; gap:8px; white-space:nowrap}
+  .brand svg{width:30px; height:30px; flex:none}
+  .brand h1{margin:0; font-size:18px; font-weight:700; color:var(--accent); letter-spacing:.12em}
+  .brand .en,.brand p{display:none}
 
-  /* icon tiles */
-  .tabs{display:grid; grid-template-columns:1fr 1fr; gap:9px}
-  .tab{display:flex; flex-direction:column; align-items:center; gap:5px; padding:13px 6px 10px; cursor:pointer;
-    background:var(--panel); border:1px solid transparent; border-radius:10px; box-shadow:var(--shadow);
-    color:var(--accent); font-size:12.5px; font-weight:500; letter-spacing:.1em; transition:transform .15s,background .15s}
-  .tab svg{width:30px; height:30px; stroke:var(--ink); fill:none; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round}
-  .tab:hover{transform:translateY(-2px)}
+  /* tabs: small icon + text, one row; scrolls sideways on a phone */
+  .tabs{display:flex; gap:4px; flex:1 1 auto; min-width:0; overflow-x:auto; scrollbar-width:thin}
+  .tab{display:flex; flex-direction:row; align-items:center; gap:6px; padding:7px 12px; cursor:pointer; white-space:nowrap;
+    background:transparent; border:1px solid transparent; border-radius:999px; color:var(--ink);
+    font-size:14px; font-weight:500; letter-spacing:.06em; transition:background .15s}
+  .tab svg{width:18px; height:18px; stroke:currentColor; fill:none; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; flex:none}
+  .tab:hover{background:var(--hover)}
   .tab[aria-pressed="true"]{background:var(--accent); color:#fff}
-  .tab[aria-pressed="true"] svg{stroke:#fff}
-  .tab:last-child{grid-column:span 1}
-  @media (max-width:1000px){ .tabs{grid-template-columns:repeat(5,1fr)} .tab{padding:10px 2px 8px; font-size:11.5px; letter-spacing:.04em} .tab svg{width:24px;height:24px} }
 
-  .mkt{background:var(--deep); color:#e7f1ec; border-radius:10px; padding:12px 14px; box-shadow:var(--shadow)}
-  .mkt .lbl{font-size:11.5px; letter-spacing:.14em; color:#9fc4b6}
-  .taiex{display:flex; flex-wrap:wrap; gap:2px 10px; align-items:baseline; font-variant-numeric:tabular-nums; margin-top:2px}
-  .taiex .v{font-size:25px; font-weight:700; letter-spacing:.01em}
+  .mkt{background:var(--deep); color:#e7f1ec; border-radius:999px; padding:4px 14px; white-space:nowrap}
+  .taiex{display:flex; gap:2px 8px; align-items:baseline; font-variant-numeric:tabular-nums}
+  .taiex .v{font-size:17px; font-weight:700; letter-spacing:.01em}
   .mkt .taiex span[style]{color:#9fc4b6 !important}
   .mkt .up{color:#ff8f84} .mkt .down{color:#62e0a8} .mkt .flat{color:#9fc4b6}
-  .stamp{font-size:11.5px; color:var(--muted); line-height:1.6; padding:0 4px}
+  .stamp{flex-basis:100%; display:flex; flex-wrap:wrap; gap:0 12px; font-size:11.5px; color:var(--muted); line-height:1.5}
   .stamp.old{color:var(--warn)}
   .dot{display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--accent)}
   .dot.stale{background:var(--orange)}
+  @media (max-width:760px){
+    .side{gap:6px 10px; position:static}           /* on a phone a sticky bar would eat a fifth of the screen */
+    #sub{display:none}
+    .mkt{padding:3px 12px} .taiex .v{font-size:15px}
+    .tabs{order:3; flex-basis:100%}
+    .tab{padding:6px 10px; font-size:13px}
+    .brand h1{font-size:16px}
+  }
+  #chartdock{scroll-margin-top:90px}                 /* the "↓ K 線圖" link must not land under the sticky bar */
 
   /* ---- content */
   .cols{display:grid; grid-template-columns:330px 1fr; gap:16px; align-items:start}
@@ -216,7 +220,12 @@
   .idxcards{display:flex; flex-wrap:wrap; gap:10px; margin-top:10px}
   .idxcard{background:var(--soft); border-radius:12px; padding:10px 16px; min-width:150px; text-align:center}
   .idxcard .v{font-size:22px; font-weight:700; display:block}
-  .hbar{display:grid; grid-template-columns:84px 1fr 60px; gap:8px; align-items:center; font-size:13px; margin:5px 0}
+  .idxcard .spark{display:block; margin:4px auto 0}
+  .newslist{margin:0; padding-left:18px; columns:2 420px; column-gap:28px; font-size:13.5px; line-height:1.6}
+  .newslist li{break-inside:avoid; margin:0 0 6px}
+  .newslist a{color:var(--ink); text-decoration:none} .newslist a:hover{color:var(--accent); text-decoration:underline}
+  .hbar{display:grid; grid-template-columns:84px 1fr 60px 64px; gap:8px; align-items:center; font-size:13px; margin:5px 0}
+  .hbar .rs{text-align:right; font-family:var(--font-num)}
   .hbar i{display:block; height:14px; border-radius:2px}
   .hbar i.up{background:var(--up)} .hbar i.down{background:var(--down)}
   .dist{display:flex; align-items:flex-end; gap:6px; height:150px; margin-top:6px}
@@ -311,8 +320,8 @@ const store = {
 };
 
 const S = {
-  index:[], byCode:{}, events:null, evDays:30, quotes:{}, quotesUpdated:null, ind:{}, fund:{}, meta:null, market:null,
-  sel:null, view:"home", home:{board:"TWSE", lead:"up", hot:"pct"}, type:"all", pick:"all", sort:"code", range:250, hist:{},
+  index:[], byCode:{}, events:null, globals:null, news:null, evDays:30, quotes:{}, quotesUpdated:null, ind:{}, fund:{}, meta:null, market:null,
+  sel:null, view:"home", home:{board:"TWSE", lead:"up", hot:"pct", mine:"watch", news:"tw"}, type:"all", pick:"all", sort:"code", range:250, hist:{},
   watch:new Set(store.get(KEY_WATCH, [])), lots:store.get(KEY_LOTS, []),
   scan:{scope:"all", term:"", busy:false, out:null, list:null, watchOnly:false, sort:{k:"pre", dir:-1}},
   bt:{kind:"ma_cross", a:10, b:30, bars:250, stop:0, cost:true, out:null},
@@ -381,9 +390,9 @@ async function boot(){
       '直接以 file:// 開啟會被瀏覽器擋下。</div>';
     return;
   }
-  const [ind, fund, mk, meta, evs] = await Promise.all(
-    [opt("data/indicators.json"), opt("data/fundamental.json"), opt("data/market.json"), opt("data/meta.json"), opt("data/events.json")]);
-  S.events = evs;
+  const [ind, fund, mk, meta, evs, glb, nws] = await Promise.all(
+    [opt("data/indicators.json"), opt("data/fundamental.json"), opt("data/market.json"), opt("data/meta.json"), opt("data/events.json"), opt("data/globals.json"), opt("data/news.json")]);
+  S.events = evs; S.globals = glb; S.news = nws;
   S.ind = (ind && ind.items) || {};
   S.fund = (fund && fund.items) || {};
   S.market = mk; S.meta = meta;
@@ -399,10 +408,12 @@ async function boot(){
 
 async function refresh(){
   try{
-    const [q, mk, evs] = await Promise.all([getJSON("data/quotes.json", true),
+    const [q, mk, evs, glb, nws] = await Promise.all([getJSON("data/quotes.json", true),
                                        getJSON("data/market.json", true).catch(() => S.market),
-                                       getJSON("data/events.json", true).catch(() => S.events)]);
-    S.events = evs;
+                                       getJSON("data/events.json", true).catch(() => S.events),
+                                       getJSON("data/globals.json", true).catch(() => S.globals),
+                                       getJSON("data/news.json", true).catch(() => S.news)]);
+    S.events = evs; S.globals = glb; S.news = nws;
     if(q.updated !== (S.quotesUpdated && S.quotesUpdated.updated)){
       S.quotes = q.items || {}; S.quotesUpdated = q; S.market = mk;
       render();
@@ -1277,10 +1288,18 @@ function paintHome(){
   const chip = (attr, val, label, on) => '<button class="chip" ' + attr + '="' + val + '" aria-pressed="' + on + '">' + label + '</button>';
   const boardChips = '<span>' + chip("data-home-board", "TWSE", "上市", h.board === "TWSE") + chip("data-home-board", "TPEX", "上櫃", h.board === "TPEX") + '</span>';
 
-  const idxCard = (name, x, note) => '<div class="idxcard"><span class="flat" style="font-size:13px">' + name + '</span><span class="v ' + cls(x.chg) + '">' + n2(x.close) + '</span><span class="' + cls(x.chg) + '">' +
-    sign(x.chg) + ' (' + sign(x.pct) + '%)</span>' + (note ? '<span class="flat" style="font-size:11.5px;display:block">' + note + '</span>' : "") + '</div>';
+  /* a tiny line of the session's 5-minute closes; only the US indices have one (the futures feed is a quote, not a series) */
+  const spark = (arr, up) => {
+    if(!arr || arr.length < 2) return "";
+    const lo = Math.min(...arr), hi = Math.max(...arr), W = 110, H = 26, sp = (hi - lo) || 1;
+    const pts = arr.map((v, i) => (i * W / (arr.length - 1)).toFixed(1) + "," + (H - 2 - (v - lo) * (H - 4) / sp).toFixed(1)).join(" ");
+    return '<svg class="spark" viewBox="0 0 ' + W + ' ' + H + '" width="' + W + '" height="' + H + '" aria-hidden="true"><polyline points="' + pts + '" fill="none" stroke="' + (up ? "var(--up)" : "var(--down)") + '" stroke-width="1.5"/></svg>';
+  };
+  const idxCard = (name, x, note, sp) => '<div class="idxcard" data-idx="' + esc(name) + '"><span class="flat" style="font-size:13px">' + name + '</span><span class="v ' + cls(x.chg) + '">' + n2(x.close != null ? x.close : x.price) + '</span><span class="' + cls(x.chg) + '">' +
+    sign(x.chg) + ' (' + sign(x.pct) + '%)</span>' + (sp || "") + (note ? '<span class="flat" style="font-size:11.5px;display:block">' + note + '</span>' : "") + '</div>';
+  const glob = ((S.globals && S.globals.items) || []).map((g) => idxCard(esc(g.name), g, g.time ? esc(g.time.slice(5)) + "（台北時間）" : "", spark(g.spark, g.chg >= 0))).join("");
   const idx = mk && mk.close != null
-    ? idxCard("加權指數", mk) + (mk.otc ? idxCard("櫃買指數", mk.otc, esc(mk.otc.date) + " 盤後") : "")
+    ? idxCard("加權指數", mk) + (mk.otc ? idxCard("櫃買指數", mk.otc, esc(mk.otc.date) + " 盤後") : "") + glob
     : '<div class="empty">指數資料尚未載入。</div>';
 
   const by = {};
@@ -1288,8 +1307,14 @@ function paintHome(){
   const secs = Object.entries(by).filter(([, a]) => a.length >= SEC_MIN).map(([name, a]) => ({name, v: a.reduce((x, y) => x + y, 0) / a.length}));
   secs.sort((a, b) => h.lead === "up" ? b.v - a.v : a.v - b.v);
   const top = secs.slice(0, 5), mx = Math.max(0.01, ...top.map((x) => Math.abs(x.v)));
-  const secHtml = secs.length ? top.map((x) => '<div class="hbar"><span>' + esc(x.name) + '</span><span><i class="' + cls(x.v) + '" style="width:' +
-    Math.max(2, Math.abs(x.v) / mx * 100).toFixed(0) + '%"></i></span><b class="' + cls(x.v) + '">' + sign(x.v) + '%</b></div>').join("")
+  /* 相對強弱 = the sector's change minus its board's index change (加權 for 上市, 櫃買 for 上櫃) */
+  const boardPct = h.board === "TWSE" ? (mk && mk.pct) : (mk && mk.otc && mk.otc.pct);
+  const rs = (v) => boardPct == null ? "—" : sign(v - boardPct);
+  const secHtml = secs.length ? '<div class="hbar flat" style="font-size:11.5px"><span>類股</span><span></span><b>漲跌</b><span class="rs">相對強弱</span></div>' +
+    top.map((x) => '<div class="hbar"><span>' + esc(x.name) + '</span><span><i class="' + cls(x.v) + '" style="width:' +
+    Math.max(2, Math.abs(x.v) / mx * 100).toFixed(0) + '%"></i></span><b class="' + cls(x.v) + '">' + sign(x.v) + '%</b>' +
+    '<span class="rs ' + (boardPct == null ? "flat" : cls(x.v - boardPct)) + '">' + rs(x.v) + '</span></div>').join("") +
+    '<div class="note" style="margin-top:6px">相對強弱 ＝ 類股漲跌 − ' + (h.board === "TWSE" ? "加權" : "櫃買") + '指數漲跌（百分點）' + (boardPct == null ? "；指數資料尚未載入" : "") + '。</div>' 
     : '<div class="empty">產業別要等下一次完整建置才有。</div>';
 
   const counts = HOME_BUCKETS.map(([, f]) => rows.filter(({q}) => f(q.pct)).length), cmax = Math.max(1, ...counts);
@@ -1305,14 +1330,36 @@ function paintHome(){
     '<div class="hotrow" data-home-open="' + esc(it.c) + '"><span>' + esc(it.n || it.c) + ' <span class="flat">' + esc(it.c) + '</span></span><span class="' + cls(q.pct) + '">' + n2(q.last) +
     '</span><span class="' + cls(q.pct) + '">' + sign(q.pct) + '%</span><span>' + (q.vol != null ? Number(q.vol).toLocaleString() : "—") + '</span></div>').join("");
 
+  /* market headlines: title, publisher, how long ago; the link opens the source in a new tab */
+  const ago = (iso) => { const m = (Date.now() - Date.parse(iso)) / 60000; return !(m >= 0) ? "" : m < 60 ? Math.round(m) + " 分鐘前" : m < 1440 ? Math.round(m / 60) + " 小時前" : Math.round(m / 1440) + " 天前"; };
+  const news = (S.news && S.news.groups && S.news.groups[h.news]) || [];
+  const safeUrl = (u) => /^https?:\/\//.test(u || "") ? u : null;
+  const newsHtml = '<div class="home-box" style="margin-top:14px"><h3>市場新聞<span>' + chip("data-home-news", "tw", "台股", h.news === "tw") + chip("data-home-news", "us", "美股", h.news === "us") + '</span></h3>' +
+    (news.length ? '<ul class="newslist">' + news.slice(0, 12).map((n) => { const u = safeUrl(n.l);
+      return '<li>' + (u ? '<a href="' + esc(u) + '" target="_blank" rel="noopener noreferrer">' + esc(n.t) + '</a>' : esc(n.t)) +
+        ' <span class="flat">' + esc(n.p || "") + (n.at ? " · " + ago(n.at) : "") + '</span></li>'; }).join("") + '</ul>' +
+      '<div class="note">標題來自 Google 新聞搜尋（關鍵字「' + (h.news === "tw" ? "台股" : "美股") + '」，最近一天），點標題開啟原始報導；本站不轉載內文，也不代表新聞觀點。</div>'
+      : '<div class="empty" style="padding:18px">' + (S.news ? "目前沒有抓到新聞。" : "新聞資料還沒載入（要等網站下一次更新）。") + '</div>') + '</div>';
+
+  /* the user's own symbols (both lists live only in this browser) */
+  const held = {};
+  for(const l of S.lots) held[l.code] = (held[l.code] || 0) + l.shares;
+  const mineCodes = h.mine === "watch" ? [...S.watch] : Object.keys(held);
+  const mineHtml = mineCodes.length ? '<div class="hotrow flat"><span>股票</span><span>成交價</span><span>漲跌幅</span><span>' + (h.mine === "hold" ? "股數" : "成交量") + '</span></div>' +
+    mineCodes.sort().map((c) => { const it = S.byCode[c] || {}, q = S.quotes[c] || {};
+      return '<div class="hotrow" data-home-open="' + esc(c) + '"><span>' + esc(it.n || c) + ' <span class="flat">' + esc(c) + '</span></span><span class="' + cls(q.pct) + '">' + n2(q.last) +
+        '</span><span class="' + cls(q.pct) + '">' + (q.pct == null ? "—" : sign(q.pct) + "%") + '</span><span>' + (h.mine === "hold" ? money(held[c]) : q.vol != null ? Number(q.vol).toLocaleString() : "—") + '</span></div>'; }).join("")
+    : '<div class="empty" style="padding:18px">' + (h.mine === "watch" ? "還沒有自選股，在「看板」清單點 ☆ 加入。" : "還沒有持倉，到「持倉」分頁新增。") + '</div>';
+
   $("detail").innerHTML = '<div class="pad"><div class="head"><span class="sym">首頁</span><span class="tag">' + (h.board === "TWSE" ? "上市" : "上櫃") + ' ' + rows.length + ' 檔個股</span>' + boardChips + '</div>' +
     '<h3 style="margin:14px 0 0;font-size:15px">主要指數行情</h3><div class="idxcards">' + idx + '</div>' +
-    '<div class="note">目前有加權與櫃買指數（櫃買為櫃買中心盤後資料）；期貨、美股指數沒有可直接取用的公開資料源，需另行加入。</div>' +
+    '<div class="note">加權、櫃買為證交所／櫃買中心資料（櫃買為盤後）；台指期為期交所近月合約（日盤／盤後）；美股指數來自 Yahoo（非官方介面，抓不到時該卡會自動隱藏），台灣白天顯示的是前一個美股交易日，時間皆為台北時間。富台指、小道瓊等沒有穩定的免費來源，所以沒有。</div>' +
     '<div class="home-grid">' +
     '<div class="home-box"><h3>產業類股<span>' + chip("data-home-lead", "up", "領漲", h.lead === "up") + chip("data-home-lead", "down", "領跌", h.lead === "down") + '</span></h3>' + secHtml + '</div>' +
     '<div class="home-box"><h3>個股漲跌分布</h3>' + dist + '</div>' +
     '<div class="home-box"><h3>熱門股<span>' + chip("data-home-hot", "pct", "漲幅排行", h.hot === "pct") + chip("data-home-hot", "vol", "成交量排行", h.hot === "vol") + '</span></h3>' + hotHtml + '</div>' +
-    '</div><div class="note">產業類股為該板個股今日漲跌的等權平均（成分股至少 5 檔才列入）；熱門股是依最近一次報價（約每 5 分鐘更新）排序的漲幅／成交量排行，不是逐筆的「瞬間」爆量。個股不含 ETF。</div>' + DISCLAIMER + '</div>';
+    '<div class="home-box"><h3>我的關注<span>' + chip("data-home-mine", "watch", "自選股", h.mine === "watch") + chip("data-home-mine", "hold", "庫存股", h.mine === "hold") + '</span></h3>' + mineHtml + '</div>' +
+    '</div>' + newsHtml + '<div class="note">產業類股為該板個股今日漲跌的等權平均（成分股至少 5 檔才列入）；熱門股是依最近一次報價（約每 5 分鐘更新）排序的漲幅／成交量排行，不是逐筆的「瞬間」爆量。個股不含 ETF。</div>' + DISCLAIMER + '</div>';
 }
 
 /* ---- 4. backtest */
@@ -1639,6 +1686,10 @@ $("detail").addEventListener("click", (e) => {
   if(hb){ S.home.board = hb.dataset.homeBoard; paintHome(); return; }
   if(hl){ S.home.lead = hl.dataset.homeLead; paintHome(); return; }
   if(hh){ S.home.hot = hh.dataset.homeHot; paintHome(); return; }
+  const hn = t.closest("[data-home-news]");
+  if(hn){ S.home.news = hn.dataset.homeNews; paintHome(); return; }
+  const hm = t.closest("[data-home-mine]");
+  if(hm){ S.home.mine = hm.dataset.homeMine; paintHome(); return; }
   if(ho){ select(ho.dataset.homeOpen); return; }
   const sp = t.closest("[data-sec-period]"), sk = t.closest("[data-sec-kind]"), st = t.closest("[data-sec-stat]"), ss = t.closest("[data-sec-sort]"), so2 = t.closest("[data-sec-open]");
   if(sp){ S.sec.period = +sp.dataset.secPeriod; S.sec.sort = S.sec.period; S.sec.dir = -1; paintSector(); return; }

@@ -29,7 +29,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.http import fetch_json  # noqa: E402
+from src.http import fetch_json, post_json  # noqa: E402
 
 DEFAULT_OUT = ROOT / "docs" / "data"
 # Two years, not one: the holdings form fills the cost price from the close on
@@ -353,6 +353,125 @@ def build_events(out, fetch=None, today=None):
     return ev
 
 
+# ------------------------------------------------------------------ global indices and TAIEX futures
+# For the 首頁 index cards. Kept out of quotes.json so that file does not grow. Every source is
+# optional: one that fails drops its card (and is named in `errors`), it never fails the build.
+YAHOO_CHART = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range=1d&interval=5m"
+US_INDICES = (("dji", "道瓊", "%5EDJI"), ("ixic", "NASDAQ", "%5EIXIC"), ("sox", "費城半導體", "%5ESOX"), ("spx", "S&P 500", "%5EGSPC"))
+TAIFEX_QUOTES = "https://mis.taifex.com.tw/futures/api/getQuoteList"
+TAIFEX_BODY = {"SymbolType": "F", "KindID": "1", "CID": "TXF", "ExpireMonth": "", "RowSize": "全部",
+               "PageNo": "", "SortColumn": "", "AscDesc": "A"}
+SPARK_POINTS = 80
+
+
+def parse_yahoo_chart(d):
+    """Yahoo chart JSON -> {price, chg, pct, time (Taipei 'YYYY-MM-DD HH:MM'), spark [closes]} or None.
+    The change is against chartPreviousClose, the previous session's close for range=1d."""
+    try:
+        r = d["chart"]["result"][0]
+        m = r["meta"]
+        price, prev = float(m["regularMarketPrice"]), float(m["chartPreviousClose"])
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None
+    if not (price > 0 and prev > 0):
+        return None
+    t = m.get("regularMarketTime")
+    when = datetime.fromtimestamp(int(t), TAIPEI).strftime("%Y-%m-%d %H:%M") if isinstance(t, (int, float)) else None
+    try:
+        closes = [round(float(x), 2) for x in r["indicators"]["quote"][0]["close"] if x is not None]
+    except (KeyError, IndexError, TypeError, ValueError):
+        closes = []
+    if len(closes) > SPARK_POINTS:                                   # keep the shape, cap the size
+        step = len(closes) / SPARK_POINTS
+        closes = [closes[int(i * step)] for i in range(SPARK_POINTS - 1)] + [closes[-1]]
+    return {"price": round(price, 2), "chg": round(price - prev, 2), "pct": round((price / prev - 1) * 100, 2),
+            "time": when, "spark": closes if len(closes) >= 2 else None}
+
+
+def parse_taifex(d, suffix):
+    """TAIFEX quote list -> the nearest-month TXF contract of one session: '-F' day, '-M' after-hours.
+    The '-S' row is the spot index and '-P' a placeholder; both are skipped. None when nothing trades."""
+    try:
+        rows = d["RtData"]["QuoteList"]
+    except (KeyError, TypeError):
+        return None
+    for r in rows or []:
+        sym = str(r.get("SymbolID") or "")
+        if not sym.endswith(suffix) or not str(r.get("CLastPrice") or "").strip():
+            continue
+        price, chg, pct = num(r.get("CLastPrice")), num(r.get("CDiff")), num(r.get("CDiffRate"))
+        if not price:
+            continue
+        cd, ct = str(r.get("CDate") or ""), str(r.get("CTime") or "")
+        when = f"{cd[:4]}-{cd[4:6]}-{cd[6:8]} {ct[:2]}:{ct[2:4]}" if len(cd) == 8 and len(ct) >= 4 else None
+        return {"price": price, "chg": chg, "pct": pct, "time": when, "spark": None, "contract": sym}
+    return None
+
+
+def build_globals(out, fetch=None, post=None):
+    fetch, post = fetch or fetch_json, post or post_json
+    items, errors = [], []
+    for key, name, suffix, session in (("txf", "台指期", "-F", "0"), ("txf_night", "台指期盤後", "-M", "1")):
+        try:
+            got = parse_taifex(post(TAIFEX_QUOTES, dict(TAIFEX_BODY, MarketType=session)), suffix)
+        except Exception:
+            got = None
+        if got:
+            items.append(dict(got, key=key, name=name))
+        else:
+            errors.append(key)
+    for key, name, sym in US_INDICES:
+        try:
+            got = parse_yahoo_chart(fetch(YAHOO_CHART.format(sym=sym)))
+        except Exception:
+            got = None
+        if got:
+            items.append(dict(got, key=key, name=name))
+        else:
+            errors.append(key)
+    g = {"updated": stamp(), "items": items, "errors": errors}
+    write_json(Path(out) / "globals.json", g)
+    return g
+
+
+# ------------------------------------------------------------------ news headlines
+# Market headlines for the 首頁, from Google News RSS (src/data/news.py, already used by the CLI).
+# Only titles, publisher, time and the link are kept; the article text is never copied.
+NEWS_QUERIES = (("tw", "台股"), ("us", "美股"))
+NEWS_PER_QUERY = 15
+
+
+def pick_news(items, limit=NEWS_PER_QUERY):
+    """Newest first, one entry per title, only http(s) links: [{t, p, at, l}]."""
+    seen, out = set(), []
+    for it in sorted(items, key=lambda i: i.get("published_at") or "", reverse=True):
+        title, link = (it.get("title") or "").strip(), (it.get("link") or "").strip()
+        if not title or title in seen or not link.startswith(("https://", "http://")):
+            continue
+        seen.add(title)
+        out.append({"t": title, "p": it.get("publisher"), "at": it.get("published_at"), "l": link})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def build_news(out, fetch_news=None):
+    if fetch_news is None:
+        from src.data.news import fetch_news                # stdlib only; safe in the 5-minute job
+    groups, errors = {}, []
+    for key, q in NEWS_QUERIES:
+        try:
+            items = pick_news(fetch_news(q))
+        except Exception:
+            items = []
+        groups[key] = items
+        if not items:
+            errors.append(key)
+    n = {"updated": stamp(), "groups": groups, "errors": errors}
+    write_json(Path(out) / "news.json", n)
+    return n
+
+
 def build_quotes(out):
     out = Path(out)
     uni = fetch_universe()
@@ -386,10 +505,20 @@ def build_quotes(out):
         events = build_events(out)
     except Exception:
         events = {"ex": [], "agm": [], "errors": ["all"]}       # never block the price refresh
+    try:
+        glob = build_globals(out)
+    except Exception:
+        glob = {"items": [], "errors": ["all"]}
+    try:
+        news = build_news(out)
+    except Exception:
+        news = {"groups": {}, "errors": ["all"]}
     return {"symbols": len(uni), "live": sum(1 for q in items.values() if q.get("live")),
             "failed_batches": len(failed), "fundamentals": len(fund),
             "market_ok": "error" not in market,
-            "events": len(events["ex"]) + len(events["agm"]), "event_errors": events["errors"]}
+            "events": len(events["ex"]) + len(events["agm"]), "event_errors": events["errors"],
+            "globals": len(glob["items"]), "globals_errors": glob["errors"],
+            "news": sum(len(v) for v in news["groups"].values()), "news_errors": news["errors"]}
 
 
 def _try(url):

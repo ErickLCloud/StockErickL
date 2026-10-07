@@ -323,11 +323,21 @@ async function until(fn, ms) { const end = Date.now() + (ms || 15000); while (Da
     t("no NaN/undefined anywhere in the sector view", (() => { $("tab-sector").click(); return !/NaN|undefined|Infinity/.test($("detail").textContent); })());
   }
 
+  /* ---- layout: navigation is a bar ABOVE the content, and the content gets the full width */
+  {
+    w.scrollTo(0, 0); await sleep(50);
+    const side = d.querySelector(".side").getBoundingClientRect(), wrap = d.querySelector(".wrap").getBoundingClientRect(), fw = d.documentElement.clientWidth;
+    t("the navigation sits above the content, not beside it", side.bottom <= wrap.top + 1 && side.width >= fw * 0.9, JSON.stringify([side.bottom, wrap.top, side.width, fw]));
+    t("the content uses (nearly) the full width", wrap.width >= fw * 0.9, wrap.width + " of " + fw);
+    t("all seven tabs are in the bar, in order", [...d.querySelectorAll(".side .tab")].map((x) => x.id).join() === "tab-home,tab-market,tab-hold,tab-scan,tab-sector,tab-ta,tab-bt");
+    t("the bar is compact on a desktop-width page (under 120px tall)", side.height < 120, side.height);
+  }
+
   /* ---- home tab */
   {
     const Sx = w.eval("S");
     $("tab-home").click(); await sleep(100);
-    t("home tab shows the three boxes and the index card", d.querySelectorAll(".home-box").length === 3 && !!d.querySelector(".idxcard"));
+    t("home tab shows the four boxes and the index cards", d.querySelectorAll(".home-grid > .home-box").length === 4 && !!d.querySelector(".newslist, .home-box h3") && !!d.querySelector('.idxcard[data-idx="加權指數"]'));
     const stocks = (board) => Sx.index.filter((i) => i.k !== "ETF" && i.b === board).map((i) => ({ i, q: Sx.quotes[i.c] })).filter((x) => x.q && x.q.pct != null && x.q.last > 0);
     let rows = stocks("TWSE");
     const bars = [...d.querySelectorAll(".dist > div")].map((x) => +x.querySelector("b").textContent);
@@ -342,11 +352,17 @@ async function until(fn, ms) { const end = Date.now() + (ms || 15000); while (Da
     d.querySelector('[data-home-hot="vol"]').click();
     const maxVol = Math.max(...rows.map((x) => x.q.vol || 0));
     t("volume ranking: first row has the largest volume", hotRows()[0].textContent.replace(/,/g, "").includes(String(maxVol)), hotRows()[0].textContent + " vs " + maxVol);
-    const secNames = [...d.querySelectorAll(".hbar > span:first-child")].map((x) => x.textContent);
+    const secNames = [...d.querySelectorAll(".hbar:not(.flat) > span:first-child")].map((x) => x.textContent);
+    const mkx = Sx.market;
+    const rsOk = [...d.querySelectorAll(".hbar:not(.flat)")].every((r) => {
+      const v = parseFloat(r.querySelector("b").textContent), rsv = r.querySelector(".rs").textContent;
+      return mkx && mkx.pct != null ? Math.abs(parseFloat(rsv) - (v - mkx.pct)) < 0.011 : rsv === "—";
+    });
+    t("relative strength = sector change - TAIEX change (to the shown precision)", rsOk);
     const sizeOf = (nm) => rows.filter((x) => x.i.s === nm).length;
     t("sector bars only list industries with >= 5 stocks quoted today", secNames.length === 0 || secNames.every((nm) => sizeOf(nm) >= 5), secNames.join());
     d.querySelector('[data-home-lead="down"]').click();
-    const downNames = [...d.querySelectorAll(".hbar b")].map((x) => parseFloat(x.textContent));
+    const downNames = [...d.querySelectorAll(".hbar:not(.flat) b")].map((x) => parseFloat(x.textContent));
     t("laggards are sorted most-negative first", downNames.every((v, i) => i === 0 || downNames[i - 1] <= v), downNames.join());
     d.querySelector('[data-home-board="TPEX"]').click();
     rows = stocks("TPEX");
@@ -357,10 +373,42 @@ async function until(fn, ms) { const end = Date.now() + (ms || 15000); while (Da
     const mk0 = Sx.market;
     Sx.market = Object.assign({}, mk0, { otc: { date: "2026-10-07", close: 430.46, chg: -0.4, pct: -0.09 } });
     $("tab-home").click(); await sleep(100);
-    const cards = [...d.querySelectorAll(".idxcard")].map((x) => x.textContent.replace(/\s+/g, ""));
-    t("home shows the OTC index card next to TAIEX when market.json has it", cards.length === 2 && cards[1].includes("櫃買指數") && cards[1].includes("430.46") && cards[1].includes("-0.40") && cards[1].includes("-0.09%") && cards[1].includes("2026-10-07"), cards.join(" | "));
+    const cards = [...d.querySelectorAll('.idxcard[data-idx="加權指數"], .idxcard[data-idx="櫃買指數"]')].map((x) => x.textContent.replace(/\s+/g, ""));
+    t("home shows the OTC index card right after TAIEX when market.json has it", cards.length === 2 && d.querySelectorAll(".idxcard")[1].dataset.idx === "櫃買指數" && cards[1].includes("櫃買指數") && cards[1].includes("430.46") && cards[1].includes("-0.40") && cards[1].includes("-0.09%") && cards[1].includes("2026-10-07"), cards.join(" | "));
     Sx.market = mk0; $("tab-home").click();
-    t("without otc in market.json only TAIEX shows (no broken card)", d.querySelectorAll(".idxcard").length === 1);
+    t("without otc in market.json there is no OTC card (no broken card)", !d.querySelector('.idxcard[data-idx="櫃買指數"]') && !!d.querySelector('.idxcard[data-idx="加權指數"]'));
+    const g0 = Sx.globals;
+    Sx.globals = { items: [{ key: "txf", name: "台指期", price: 49979, chg: -103, pct: -0.21, time: "2026-10-07 13:45", spark: null },
+      { key: "dji", name: "道瓊", price: 51521.28, chg: 253.38, pct: 0.49, time: "2026-10-07 04:42", spark: [1, 3, 2, 5] }], errors: ["sox"] };
+    $("tab-home").click(); await sleep(100);
+    const gc = [...d.querySelectorAll(".idxcard")].map((x) => x.textContent.replace(/\s+/g, ""));
+    t("futures and US index cards follow the Taiwan ones, with their time", gc.some((x) => x.startsWith("台指期49979.00-103.00(-0.21%)10-07 13:45".replace(/\s+/g, ""))) && gc.some((x) => x.startsWith("道瓊51521.28+253.38(+0.49%)")), gc.join(" | "));
+    t("a card with a series gets a sparkline, one without does not", !!d.querySelector('.idxcard[data-idx="道瓊"] .spark') && !d.querySelector('.idxcard[data-idx="台指期"] .spark'));
+    t("a source that failed simply has no card", !gc.some((x) => x.startsWith("費城半導體")));
+    Sx.globals = null; $("tab-home").click(); await sleep(50);
+    t("no globals.json: only the Taiwan cards, nothing broken", d.querySelectorAll(".idxcard").length >= 1 && !d.querySelector('.idxcard[data-idx="道瓊"]'));
+    Sx.globals = g0;
+    /* my stocks */
+    const keepW = new Set(Sx.watch), keepL = Sx.lots;
+    const wc = Sx.index.find((i) => i.k === "STOCK").c;
+    Sx.watch.clear(); Sx.watch.add(wc); Sx.lots = [{ id: "m1", code: wc, date: "2025-01-02", shares: 3000, cost: 1, note: "" }, { id: "m2", code: wc, date: "2025-02-02", shares: 500, cost: 1, note: "" }];
+    $("tab-home").click(); await sleep(50);
+    const mine = () => [...d.querySelectorAll('.home-box:last-child .hotrow[data-home-open]')].map((x) => x.textContent.replace(/\s+/g, " "));
+    t("my-stocks box lists the watchlist", mine().length === 1 && mine()[0].includes(wc), mine().join(" | "));
+    d.querySelector('[data-home-mine="hold"]').click();
+    t("…and the holdings, with the shares summed per symbol (3,000 + 500)", mine().length === 1 && mine()[0].includes("3,500"), mine().join(" | "));
+    Sx.watch.clear(); keepW.forEach((c) => Sx.watch.add(c)); Sx.lots = keepL;
+    const n0 = Sx.news;
+    Sx.news = { groups: { tw: [{ t: "<b>標題</b>一", p: "來源A", at: new Date(Date.now() - 30 * 60000).toISOString(), l: "https://example.com/a" },
+      { t: "標題二", p: "來源B", at: new Date().toISOString(), l: "javascript:alert(1)" }], us: [] }, errors: ["us"] };
+    $("tab-home").click(); await sleep(50);
+    const lis = [...d.querySelectorAll(".newslist li")];
+    t("news: headlines listed with publisher and age", lis.length === 2 && /來源A/.test(lis[0].textContent) && /30 分鐘前/.test(lis[0].textContent), lis.map((x) => x.textContent).join(" | "));
+    t("news: titles are text, never HTML", lis[0].textContent.startsWith("<b>標題</b>一") && !lis[0].querySelector("b"));
+    t("news: a non-web link is not made clickable; a web link opens in a new tab safely", !lis[1].querySelector("a") && lis[0].querySelector("a").target === "_blank" && /noopener/.test(lis[0].querySelector("a").rel));
+    d.querySelector('[data-home-news="us"]').click();
+    t("news: an empty group says so", /目前沒有抓到新聞/.test(d.querySelector(".newslist") ? "" : $("detail").textContent));
+    Sx.news = n0; $("tab-home").click();
     t("no NaN/undefined in the home view", (() => { $("tab-home").click(); return !/NaN|undefined|Infinity/.test($("detail").textContent); })());
   }
 

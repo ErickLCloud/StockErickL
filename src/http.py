@@ -20,7 +20,7 @@ import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 
-__all__ = ["make_context", "fetch_bytes", "fetch_json", "fetch_xml"]
+__all__ = ["make_context", "fetch_bytes", "fetch_json", "fetch_xml", "post_json"]
 
 _UA = "Mozilla/5.0 (compatible; stock-analyzer/1.0)"
 _TIMEOUT = 90
@@ -64,7 +64,11 @@ def fetch_bytes(url: str, timeout: int = _TIMEOUT) -> bytes:
     The TWSE servers reset connections now and then. Without a retry a single
     reset at the very first request killed a ten-minute history build before it
     had fetched anything."""
-    req = urllib.request.Request(url, headers={"User-Agent": _UA})
+    return _read(urllib.request.Request(url, headers={"User-Agent": _UA}), timeout)
+
+
+def _read(req, timeout):
+    """Open `req` with the shared TLS context, retrying transient failures."""
     for attempt in range(1, ATTEMPTS + 1):
         try:
             with urllib.request.urlopen(req, timeout=timeout, context=_CTX) as resp:
@@ -81,3 +85,11 @@ def fetch_json(url: str, timeout: int = _TIMEOUT):
 
 def fetch_xml(url: str, timeout: int = _TIMEOUT) -> ET.Element:
     return ET.fromstring(fetch_bytes(url, timeout))
+
+
+def post_json(url: str, body: dict, timeout: int = _TIMEOUT):
+    """POST `body` as JSON and parse the JSON reply. Same TLS context and retry rules as fetch_bytes.
+    TAIFEX's quote service only answers POST."""
+    req = urllib.request.Request(url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"), method="POST",
+                                 headers={"User-Agent": _UA, "Content-Type": "application/json"})
+    return json.loads(_read(req, timeout))
