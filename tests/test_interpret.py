@@ -87,8 +87,11 @@ def test_clean_keeps_only_checkable_items_and_computes_vs_rule():
 
 def test_tool_input_requires_the_report_block():
     assert I.tool_input({"content": [{"type": "text"}, {"type": "tool_use", "name": "report", "input": {"a": 1}}]}) == {"a": 1}
-    with pytest.raises(ValueError):
-        I.tool_input({"content": [{"type": "text", "text": "hi"}]})
+    fenced = '好的：\n```json\n{"summary": "s", "items": []}\n```'
+    assert I.tool_input({"content": [{"type": "text", "text": fenced}]}) == {"summary": "s", "items": []}
+    for bad in ("hi", '{"no": "items"}', "{broken"):
+        with pytest.raises(ValueError):
+            I.tool_input({"content": [{"type": "text", "text": bad}]})
 
 
 def wif_env(tmp_path, workspace=None):
@@ -146,7 +149,7 @@ def test_run_writes_page_file_and_archive(tmp_path):
         (out / "interpret" / "2026-10-13.json").read_text(encoding="utf-8"))
     url, body, headers = post.calls[1]
     assert url.endswith("/v1/messages") and headers["authorization"] == "Bearer sk-ant-oat01-test"
-    assert body["model"] == I.MODEL and body["tool_choice"] == {"type": "tool", "name": "report"}
+    assert body["model"] == I.MODEL and body["tool_choice"] == {"type": "auto"}
     assert "2330" not in body["messages"][0]["content"]          # no holdings or codes are sent
 
 

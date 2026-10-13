@@ -157,7 +157,7 @@ SYSTEM = """你是台股盤前分析助手，用繁體中文寫給一位個人�
 - 規則（r:…）是回測過的統計傾向；新聞標題只是線索，不要把單一標題當成定論。
 - 寧可少寫，不要湊數：最多 6 項。真的沒有值得說的就回空清單，summary 說明今天沒有明顯訊號。
 - summary 最多 3 句，講今天最重要的一兩件事和原因。
-- 用 report 工具回答。"""
+- 一定要呼叫 report 工具回答，不要另外寫文字。"""
 
 TOOL = {
     "name": "report",
@@ -182,8 +182,10 @@ TOOL = {
 
 
 def request_body(ctx):
+    # tool_choice "tool"/"any" (forcing the tool) is rejected by this model; "auto" plus the
+    # instruction in SYSTEM, and tool_input() also accepts a bare JSON answer.
     return {"model": MODEL, "max_tokens": MAX_TOKENS, "system": SYSTEM,
-            "tools": [TOOL], "tool_choice": {"type": "tool", "name": "report"},
+            "tools": [TOOL], "tool_choice": {"type": "auto"},
             "messages": [{"role": "user", "content": json.dumps(ctx, ensure_ascii=False)}]}
 
 
@@ -210,10 +212,21 @@ def clean(report, theme_names, refs, fired):
 
 
 def tool_input(resp):
-    for block in (resp or {}).get("content") or []:
+    """The report: the `report` tool call, or failing that a JSON object in the text."""
+    blocks = (resp or {}).get("content") or []
+    for block in blocks:
         if block.get("type") == "tool_use" and block.get("name") == "report":
             return block.get("input")
-    raise ValueError("no report tool_use block in the response")
+    text = "".join(b.get("text") or "" for b in blocks if b.get("type") == "text")
+    start, end = text.find("{"), text.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            doc = json.loads(text[start:end + 1])
+            if isinstance(doc, dict) and "items" in doc:
+                return doc
+        except ValueError:
+            pass
+    raise ValueError("no report in the response: " + text[:300])
 
 
 # ------------------------------------------------------------------ Claude API (WIF)
