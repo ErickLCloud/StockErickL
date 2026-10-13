@@ -108,6 +108,19 @@ jobs:
         if: env.MODE == 'full' && steps.history.outcome != 'success'
         run: echo "::warning::history rebuild failed; deploying fresh quotes with the PREVIOUS history"
 
+      # The live-quote Edge Function lives in a free Supabase project, which is
+      # paused after about a week without database activity. One tiny read a day
+      # keeps it up. Never fails the build: the page falls back to the snapshot.
+      - name: Keep the Supabase project awake (daily)
+        if: env.MODE == 'full'
+        continue-on-error: true
+        env:
+          SB_URL: ${{ secrets.SUPABASE_URL }}
+          SB_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          if [ -z "$SB_URL" ] || [ -z "$SB_KEY" ]; then echo "::notice::SUPABASE_URL / SUPABASE_KEY not set; skipping"; exit 0; fi
+          curl -fsS -m 30 "$SB_URL/rest/v1/keepalive?select=id&limit=1" -H "apikey: $SB_KEY" -H "Authorization: Bearer $SB_KEY"
+
       - name: Refresh prices, index, fundamentals and TAIEX
         run: python scripts/build_web_data.py quotes --out _site/data
 

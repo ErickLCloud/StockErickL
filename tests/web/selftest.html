@@ -27,6 +27,23 @@ t("taipeiToday rolls over at UTC+8",
 t("taipeiToday before the rollover",
   C.taipeiToday(Date.parse("2026-10-06T15:30:00Z")) === "2026-10-06");
 
+/* ---- live overlay */
+const bc = {"2330": {b: "TWSE"}, "6488": {b: "TPEX"}};
+t("liveChannels maps boards and adds both indices, skips unknown",
+  JSON.stringify(C.liveChannels(["2330", "6488", "9999", "2330"], bc)) === JSON.stringify(["tse_t00.tw", "otc_o00.tw", "tse_2330.tw", "otc_6488.tw"]));
+const lv = C.parseLive([{c: "2330", z: "1,010.00", y: "1000.00", o: "1000", h: "1012", l: "999", v: "5,000", t: "10:15:03"},
+  {c: "2317", z: "-", y: "100", b: "-", a: "-"}, {c: "t00", z: "23000.5", y: "22900.5", t: "10:15:00"}, {c: "o00", z: "250", y: "255"}]);
+t("parseLive computes chg/pct and strips commas", lv.codes["2330"].last === 1010 && lv.codes["2330"].chg === 10 && lv.codes["2330"].pct === 1 && lv.codes["2330"].vol === 5000);
+t("parseLive skips a symbol with no trade yet ('-')", !("2317" in lv.codes));
+t("parseLive splits out the indices", lv.twse.close === 23000.5 && lv.twse.chg === 100 && lv.otc.pct === -1.96, JSON.stringify(lv.otc));
+const lv2 = C.parseLive([{c: "2330", z: "-", pz: "-", y: "2540", b: "2500.0000_2495.0000_", a: "2505.0000_", tlong: "1791863293000"}]);
+t("parseLive: z '-' mid-session falls back to best bid, flagged est", lv2.codes["2330"].last === 2500 && lv2.codes["2330"].est === true && lv2.codes["2330"].at === 1791863293000);
+t("parseLive: a real trade is not est", lv.codes["2330"].est === false);
+t("parseLive survives nothing", C.parseLive(null).twse === null);
+t("liveWindow open Wed 10:00 Taipei", C.liveWindow(Date.parse("2026-10-14T02:00:00Z")));
+t("liveWindow closed Wed 14:00 Taipei", !C.liveWindow(Date.parse("2026-10-14T06:00:00Z")));
+t("liveWindow closed Sat 10:00 Taipei", !C.liveWindow(Date.parse("2026-10-17T02:00:00Z")));
+
 /* ---- holdings maths: same numbers as the Python hand-check */
 const m1 = C.lotMetrics({ cost: 168.5, shares: 1000, date: "2024-10-08" }, 116.45, "2026-10-06");
 t("pnl -52050", near(m1.pnl, -52050, 0.01), m1.pnl);

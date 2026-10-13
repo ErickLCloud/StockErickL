@@ -298,6 +298,7 @@
   </div>
 </div>
 
+<script src="live-config.js"></script>
 <script src="calc.js"></script>
 <script src="analysis.js"></script>
 <script>
@@ -334,6 +335,8 @@ const S = {
 
 const $ = (id) => document.getElementById(id);
 const n2 = (v) => (v === null || v === undefined || Number.isNaN(v)) ? "—" : Number(v).toFixed(2);
+/* price with a "≈" when it is not a trade (MIS sent no last trade; best bid/ask stands in) */
+const px = (q) => (q && q.est ? "≈" : "") + n2(q && q.last);
 const money = (v) => (v === null || v === undefined || Number.isNaN(v)) ? "—" : Math.round(v).toLocaleString("en-US");
 const cls = (v) => v > 0 ? "up" : v < 0 ? "down" : "flat";
 const sign = (v) => (v === null || v === undefined || Number.isNaN(v)) ? "—" : (v > 0 ? "+" : "") + Number(v).toFixed(2);
@@ -416,7 +419,7 @@ async function refresh(){
                                        getJSON("data/news.json", true).catch(() => S.news)]);
     S.events = evs; S.globals = glb; S.news = nws;
     if(q.updated !== (S.quotesUpdated && S.quotesUpdated.updated)){
-      S.quotes = q.items || {}; S.quotesUpdated = q; S.market = mk;
+      S.quotes = q.items || {}; S.quotesUpdated = q; S.market = mk; applyLive();
       render();
       if(S.view === "holdings") refreshLotArea(); else if(S.view === "home") paintHome(); else if(S.view === "market" && S.sel) paintDetail(S.sel);
     }
@@ -434,10 +437,14 @@ function paintHeader(){
     rel = age < 1 ? "剛剛" : age < 90 ? Math.round(age) + " 分鐘前" :
           age < 2880 ? Math.round(age / 60) + " 小時前" : Math.round(age / 1440) + " 天前";
   }
-  $("stamp").textContent = q.updated ? "報價 " + (q.updated.slice(0, 10)) + " " + clock + "（台北）· " + rel : "—";
+  const liveOn = S.liveAt && Date.now() - S.liveAt < 40000;
+  if(liveOn){ $("stamp").textContent = "即時 " + new Date(S.liveAt + 8 * 3600000).toISOString().slice(11, 19) + "（我的持股／自選＋大盤）· 其餘 " + clock + " 快照"; $("dot").className = "dot"; $("stampbox").classList.remove("old"); }
+  else $("stamp").textContent = q.updated ? "報價 " + (q.updated.slice(0, 10)) + " " + clock + "（台北）· " + rel : "—";
   const stale = age !== null && age > 30;
-  $("stampbox").classList.toggle("old", stale);
-  $("dot").className = "dot" + ((q.live_count || 0) && !stale ? "" : " stale");
+  if(!liveOn){
+    $("stampbox").classList.toggle("old", stale);
+    $("dot").className = "dot" + ((q.live_count || 0) && !stale ? "" : " stale");
+  }
   const total = Object.keys(S.quotes).length;
   let sub = (q.live_count || 0) + " / " + total + " 檔有盤中報價";
   if(stale) sub += " · 資料較舊（盤後，或排程延遲）";
@@ -459,6 +466,8 @@ function paintNote(){
     "資料來自 TWSE / TPEx 公開資料與 TWSE MIS 盤中資訊，由 GitHub Actions 於伺服器端定時抓取" +
     "（這些端點皆未開放 CORS，瀏覽器無法直接呼叫），因此是<strong>近即時</strong>而非逐筆即時；" +
     "上方時間為實際顯示的那份報價的時間。" +
+    "價格前有 <strong>≈</strong> 表示證交所當下沒給成交價，暫以最佳買價（無買價時用賣價）代替。" +
+    "設定即時代理後，持倉、自選股與加權／櫃買指數盤中約每 10 秒更新，其餘仍為快照。" +
     "ETF 沒有本益比等基本面資料（TWSE 未提供），以 — 表示。" +
     "<strong>自選與持倉只存在這個瀏覽器</strong>（localStorage），不會上傳、也不會出現在公開的 repo；" +
     "換裝置或清除網站資料就會消失，請用「匯出」備份。損益<strong>未含手續費與證交稅</strong>。" +
@@ -489,7 +498,7 @@ function render(){
         '" title="' + (on ? "移出自選" : "加入自選") + '">' + (on ? "★" : "☆") + '</span> ' + esc(it.c) +
         '<span class="kind">' + (it.k === "ETF" ? "ETF" : "股") + '</span>' +
         (q.live ? "" : ' <span class="flat" title="無盤中報價，顯示最後收盤">·</span>') + '</div>' +
-      '<div class="px ' + c + '">' + n2(q.last) + '</div>' +
+      '<div class="px ' + c + '">' + px(q) + '</div>' +
       '<div class="name">' + esc(it.n || "") + '</div>' +
       '<div class="pct ' + c + '">' + sign(q.pct) + '%</div></div>';
   }).join("");
@@ -533,7 +542,7 @@ function paintDetail(code){
       '<span class="tag">' + (it.k === "ETF" ? "ETF" : "個股") + '</span>' +
       (q.live ? "" : '<span class="tag">收盤值</span>') +
       '<button class="act" id="d-add">＋ 加入持倉</button></div>' +
-    '<div class="head" style="margin-top:6px"><span class="big ' + c + '">' + n2(q.last) + '</span>' +
+    '<div class="head" style="margin-top:6px"><span class="big ' + c + '">' + px(q) + '</span>' +
       '<span class="' + c + '" style="font-size:16px">' + sign(q.chg) + ' (' + sign(q.pct) + '%)</span>' +
       '<span style="color:var(--muted);font-size:12.5px">' + (q.time ? "成交時間 " + esc(q.time) : "") + '</span></div>' +
     '<div class="grid">' +
@@ -1300,7 +1309,7 @@ function paintHome(){
     sign(x.chg) + ' (' + sign(x.pct) + '%)</span>' + (sp || "") + (note ? '<span class="flat" style="font-size:11.5px;display:block">' + note + '</span>' : "") + '</div>';
   const glob = ((S.globals && S.globals.items) || []).map((g) => idxCard(esc(g.name), g, g.time ? esc(g.time.slice(5)) + "（台北時間）" : "", spark(g.spark, g.chg >= 0))).join("");
   const idx = mk && mk.close != null
-    ? idxCard("加權指數", mk) + (mk.otc ? idxCard("櫃買指數", mk.otc, esc(mk.otc.date) + " 盤後") : "") + glob
+    ? idxCard("加權指數", mk, mk.time ? "即時 " + esc(mk.time) : "") + (mk.otc ? idxCard("櫃買指數", mk.otc, mk.otc.time ? "即時 " + esc(mk.otc.time) : esc(mk.otc.date) + " 盤後") : "") + glob
     : '<div class="empty">指數資料尚未載入。</div>';
 
   const by = {};
@@ -1328,7 +1337,7 @@ function paintHome(){
 
   const hot = rows.filter(({q}) => h.hot === "pct" ? true : q.vol > 0).slice().sort((a, b) => h.hot === "pct" ? b.q.pct - a.q.pct : (b.q.vol || 0) - (a.q.vol || 0)).slice(0, 10);
   const hotHtml = '<div class="hotrow flat"><span>股票</span><span>成交價</span><span>漲跌幅</span><span>成交量</span></div>' + hot.map(({it, q}) =>
-    '<div class="hotrow" data-home-open="' + esc(it.c) + '"><span>' + esc(it.n || it.c) + ' <span class="flat">' + esc(it.c) + '</span></span><span class="' + cls(q.pct) + '">' + n2(q.last) +
+    '<div class="hotrow" data-home-open="' + esc(it.c) + '"><span>' + esc(it.n || it.c) + ' <span class="flat">' + esc(it.c) + '</span></span><span class="' + cls(q.pct) + '">' + px(q) +
     '</span><span class="' + cls(q.pct) + '">' + sign(q.pct) + '%</span><span>' + (q.vol != null ? Number(q.vol).toLocaleString() : "—") + '</span></div>').join("");
 
   /* market headlines: title, publisher, how long ago; the link opens the source in a new tab */
@@ -1348,7 +1357,7 @@ function paintHome(){
   const mineCodes = h.mine === "watch" ? [...S.watch] : Object.keys(held);
   const mineHtml = mineCodes.length ? '<div class="hotrow flat"><span>股票</span><span>成交價</span><span>漲跌幅</span><span>' + (h.mine === "hold" ? "股數" : "成交量") + '</span></div>' +
     mineCodes.sort().map((c) => { const it = S.byCode[c] || {}, q = S.quotes[c] || {};
-      return '<div class="hotrow" data-home-open="' + esc(c) + '"><span>' + esc(it.n || c) + ' <span class="flat">' + esc(c) + '</span></span><span class="' + cls(q.pct) + '">' + n2(q.last) +
+      return '<div class="hotrow" data-home-open="' + esc(c) + '"><span>' + esc(it.n || c) + ' <span class="flat">' + esc(c) + '</span></span><span class="' + cls(q.pct) + '">' + px(q) +
         '</span><span class="' + cls(q.pct) + '">' + (q.pct == null ? "—" : sign(q.pct) + "%") + '</span><span>' + (h.mine === "hold" ? money(held[c]) : q.vol != null ? Number(q.vol).toLocaleString() : "—") + '</span></div>'; }).join("")
     : '<div class="empty" style="padding:18px">' + (h.mine === "watch" ? "還沒有自選股，在「看板」清單點 ☆ 加入。" : "還沒有持倉，到「持倉」分頁新增。") + '</div>';
 
@@ -1481,7 +1490,7 @@ function lotAreaHtml(){
       (evChips[l.code] ? '<br>' + evChips[l.code] : "") +
       (l.note ? '<br><span style="color:var(--muted);font-size:12px">' + esc(l.note) + '</span>' : "") + '</td>' +
       '<td>' + esc(l.date) + '</td><td>' + money(l.shares) + '</td><td>' + n2(l.cost) + '</td>' +
-      '<td>' + n2(q.last) + (q.live === false || q.last == null ? ' <span class="flat" title="無盤中報價，顯示最後收盤">·</span>' : "") + '</td>' +
+      '<td>' + px(q) + (q.live === false || q.last == null ? ' <span class="flat" title="無盤中報價，顯示最後收盤">·</span>' : "") + '</td>' +
       '<td>' + money(m.value) + '</td>' +
       '<td class="' + cls(m.pnl) + '">' + (m.pnl == null ? "—" : (m.pnl > 0 ? "+" : "") + money(m.pnl)) + '</td>' +
       '<td>' + (known ? (m.div > 0 ? "+" : "") + money(m.div) + (m.divComplete === false ? "†" : "") : "—") + '</td>' +
@@ -1778,7 +1787,41 @@ document.addEventListener("keydown", (e) => {
   if(e.key === "/" && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)){ e.preventDefault(); $("q").focus(); }
 });
 
-boot();
+/* ------------------------------------------------- live overlay (own symbols + indices only)
+ * Everything else stays on the ~5-minute snapshot. Off unless LIVE_URL is set (docs/live-config.js). */
+S.liveAt = null; S.liveCodes = {}; S.liveIdx = null;
+const NOLIVE = new URLSearchParams(location.search).has("nolive");   /* tests: results must not depend on the clock */
+function ownCodes(){ return [...new Set([...S.lots.map((l) => l.code), ...S.watch])]; }
+function applyLive(){
+  for(const [c, q] of Object.entries(S.liveCodes)) S.quotes[c] = Object.assign({}, S.quotes[c], q);
+  if(S.liveIdx && (S.liveIdx.twse || S.liveIdx.otc)){
+    const base = S.market || {};
+    if(S.liveIdx.twse) S.market = Object.assign({}, base, S.liveIdx.twse);
+    if(S.liveIdx.otc) S.market = Object.assign({}, S.market || base, {otc: Object.assign({}, (S.market || base).otc, S.liveIdx.otc, {date: C.taipeiToday()})});
+  }
+}
+async function pollLive(){
+  if(!window.LIVE_URL || NOLIVE || document.hidden || !C.liveWindow(Date.now())) return;
+  try{
+    const ch = C.liveChannels(ownCodes(), S.byCode);
+    const r = await fetch(window.LIVE_URL + "?ex_ch=" + encodeURIComponent(ch.join("|")), {cache: "no-store"});
+    if(!r.ok) throw new Error("HTTP " + r.status);
+    const d = await r.json();
+    if(String(d.rtcode) !== "0000") throw new Error("rtcode " + d.rtcode);
+    const p = C.parseLive(d.msgArray);
+    /* MIS answers from several nodes whose data can be seconds apart; never let an older reply overwrite a newer one */
+    const newer = (x, old) => x && (!old || !(old.at > x.at));
+    for(const [c, q] of Object.entries(p.codes)) if(newer(q, S.liveCodes[c])) S.liveCodes[c] = q;
+    const li = S.liveIdx || {};
+    S.liveIdx = {twse: newer(p.twse, li.twse) ? p.twse : li.twse, otc: newer(p.otc, li.otc) ? p.otc : li.otc};
+    S.liveAt = Date.now();
+    applyLive(); paintHeader();
+    if(S.view === "holdings") refreshLotArea(); else if(S.view === "home") paintHome(); else if(S.view === "market"){ render(); if(S.sel) paintDetail(S.sel); }
+  }catch(e){ S.liveAt = null; }     /* fall back silently to the snapshot */
+}
+
+boot().then(pollLive);
+setInterval(pollLive, 10000);
 setInterval(refresh, 60000);        /* a new deployment lands every ~5 min; poll faster to pick it up */
 setInterval(paintHeader, 30000);    /* keep "N 分鐘前" honest between polls */
 </script>

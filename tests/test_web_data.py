@@ -78,6 +78,24 @@ def test_parse_mis_no_trade_yet_has_no_price_or_change():
     assert q["prev"] == 2575.0
 
 
+def test_parse_mis_falls_back_to_best_bid_when_z_is_dash_mid_session():
+    # Real 2026-10-13 11:48 response: trading, volume rising, but z and pz are '-'.
+    q = bw.parse_mis([{"c": "2330", "z": "-", "pz": "-", "y": "2540.0000", "v": "21637",
+                       "b": "2500.0000_2495.0000_", "a": "2505.0000_2510.0000_"}])["2330"]
+    assert q["last"] == 2500.0 and q["est"] is True and q["chg"] == -40.0
+
+
+def test_parse_mis_ask_when_no_bid_and_real_trade_is_not_estimated():
+    q = bw.parse_mis([{"c": "1", "z": "-", "y": "10", "b": "-", "a": "11.0000_"}])["1"]
+    assert q["last"] == 11.0 and q["est"] is True
+    assert bw.parse_mis([{"c": "1", "z": "10.5", "y": "10"}])["1"]["est"] is False
+
+
+def test_quote_item_keeps_the_estimated_flag():
+    q = bw.quote_item({"last": 10.0, "prev": 10.0, "chg": 0.0, "pct": 0.0, "est": True}, {})
+    assert q["est"] is True
+
+
 def test_parse_mis_ignores_messages_without_a_code():
     assert bw.parse_mis([{"z": "1"}, {"c": ""}]) == {}
 

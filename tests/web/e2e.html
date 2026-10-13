@@ -62,7 +62,7 @@ async function load(url) {
     const Q = quotes.items;
 
     /* ---- boot */
-    const booted = await load("../../docs/index.html");
+    const booted = await load("../../docs/index.html?nolive");
     t("page boots and lists rows", !!booted);
     t("no script error on load", !D.documentElement.hasAttribute("data-js-error"), D.documentElement.getAttribute("data-js-error"));
     const total = Number((($("count").textContent.match(/共 (\d+) 檔/) || [])[1]) || 0);
@@ -215,7 +215,7 @@ async function load(url) {
     t("two lots persisted", JSON.parse(localStorage.getItem("stockerickl.lots.v1")).length === 2);
 
     /* persistence across a reload */
-    await load("../../docs/index.html");
+    await load("../../docs/index.html?nolive");
     $("tab-hold").click();
     t("holdings survive a page reload", D.querySelectorAll("#lottable tbody tr").length === 2);
     type($("q"), "2330");

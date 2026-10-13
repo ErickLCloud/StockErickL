@@ -22,7 +22,7 @@ DEST = ROOT / "publish"
 
 # Directories are mirrored (files removed from the source are removed from the
 # destination too); plain files are just copied.
-MANAGED_DIRS = [".github", "scripts", "src", "tests", "docs"]
+MANAGED_DIRS = [".github", "scripts", "src", "tests", "docs", "supabase", "worker"]
 MANAGED_FILES = ["main.py", "requirements.txt", "README.md", "db/schema.sql"]
 
 # Never copied, wherever they appear under a managed path.

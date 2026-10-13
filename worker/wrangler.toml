@@ -1,0 +1,8 @@
+name = "stock-live-proxy"
+main = "live-proxy.js"
+compatibility_date = "2026-01-01"
+
+[vars]
+# Comma-separated origins allowed to call the proxy. Set to your Pages origin, e.g.
+# "https://<user>.github.io". "*" works but lets any site use your free quota.
+ALLOW_ORIGIN = "*"

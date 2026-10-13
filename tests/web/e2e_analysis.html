@@ -16,7 +16,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(fn, ms) { const end = Date.now() + (ms || 15000); while (Date.now() < end) { const v = fn(); if (v) return v; await sleep(100); } return null; }
 
 (async () => {
-  const f = document.getElementById("f"); f.src = "../../docs/" + (new URLSearchParams(location.search).get("page") || "index.html");
+  const f = document.getElementById("f"); f.src = "../../docs/" + (new URLSearchParams(location.search).get("page") || "index.html") + "?nolive";
   await new Promise((r) => f.addEventListener("load", r, { once: true }));
   const d = f.contentDocument, w = f.contentWindow, $ = (id) => d.getElementById(id);
   await until(() => d.querySelectorAll(".row").length > 0);

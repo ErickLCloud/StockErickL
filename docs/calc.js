@@ -119,6 +119,47 @@
              div, total: pnl + div, totRetPct: cost > 0 ? ((pnl + div) / cost) * 100 : null, divUnknown, divIncomplete };
   }
 
+  /* ---- live overlay (TWSE MIS via the worker proxy) */
+  const LIVE_INDEX = { TWSE: "tse_t00.tw", TPEX: "otc_o00.tw" };
+
+  /* MIS channel list for the given codes (+ the two indices); unknown codes are skipped. */
+  function liveChannels(codes, byCode) {
+    const out = [LIVE_INDEX.TWSE, LIVE_INDEX.TPEX];
+    for (const c of codes) {
+      const it = byCode[c];
+      if (it) out.push((it.b === "TWSE" ? "tse_" : "otc_") + c + ".tw");
+    }
+    return [...new Set(out)];
+  }
+
+  /* MIS msgArray -> {codes: {code: quote}, twse, otc}. z is the last trade ('-' before the first),
+   * y the previous close, v cumulative lots. Mirrors parse_mis in build_web_data.py. */
+  function parseLive(msgs) {
+    const f = (v) => { const x = parseFloat(String(v == null ? "" : v).replace(/,/g, "")); return Number.isFinite(x) ? x : null; };
+    const out = { codes: {}, twse: null, otc: null };
+    /* z is the last trade, but MIS often sends '-' mid-session while the stock trades;
+     * fall back to pz, best bid, best ask (same order as mis_price in Python) and flag it. */
+    const lvl = (s) => f(String(s || "").split("_")[0]);
+    for (const m of msgs || []) {
+      let last = f(m.z), est = false;
+      if (last === null) for (const v of [f(m.pz), lvl(m.b), lvl(m.a)]) if (v !== null && v > 0) { last = v; est = true; break; }
+      const prev = f(m.y);
+      if (!m.c || last === null) continue;
+      const chg = prev ? Math.round((last - prev) * 100) / 100 : null;
+      const pct = prev ? Math.round((last / prev - 1) * 10000) / 100 : null;
+      if (m.c === "t00") out.twse = { close: last, chg, pct, time: m.t || null, at: f(m.tlong) };
+      else if (m.c === "o00") out.otc = { close: last, chg, pct, time: m.t || null, at: f(m.tlong) };
+      else out.codes[m.c] = { live: true, est, last, prev, chg, pct, open: f(m.o), high: f(m.h), low: f(m.l), vol: f(m.v), time: m.t || null, at: f(m.tlong) };
+    }
+    return out;
+  }
+
+  /* Taiwan cash session plus a few minutes either side: Mon-Fri 08:55-13:35 Taipei. */
+  function liveWindow(nowMs) {
+    const t = new Date(nowMs + 8 * 3600000), dow = t.getUTCDay(), mins = t.getUTCHours() * 60 + t.getUTCMinutes();
+    return dow >= 1 && dow <= 5 && mins >= 8 * 60 + 55 && mins <= 13 * 60 + 35;
+  }
+
   function ageMinutes(iso, nowMs) {
     const t = Date.parse(iso);
     if (Number.isNaN(t)) return null;
@@ -248,6 +289,6 @@
     return rows.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : a.type < b.type ? -1 : 1);
   }
 
-  root.Calc = { nextMonthDay, nextRevenueDeadline, nextReportDeadline, upcomingEvents, REPORT_DEADLINES, isoDays, validISO, taipeiToday, priceOnOrBefore, dividendsFor, lotMetrics, totals, ageMinutes,
+  root.Calc = { nextMonthDay, nextRevenueDeadline, nextReportDeadline, upcomingEvents, REPORT_DEADLINES, isoDays, validISO, taipeiToday, priceOnOrBefore, dividendsFor, lotMetrics, totals, ageMinutes, liveChannels, parseLive, liveWindow,
                 filterItems, sortItems, parseLots };
 })(typeof window !== "undefined" ? window : globalThis);

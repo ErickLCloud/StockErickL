@@ -159,15 +159,33 @@ def ex_ch(code, board):
     return f"{'tse' if board == 'TWSE' else 'otc'}_{code}.tw"
 
 
+def first_level(book):
+    """'2500.0000_2495.0000_..._' (MIS best-five string) -> the best price, or None."""
+    return num((book or "").split("_", 1)[0])
+
+
+def mis_price(m):
+    """(price, estimated). z is the last trade, but MIS often sends '-' during
+    continuous trading even though the stock is trading (volume still rising),
+    so fall back to pz, then the best bid, then the best ask, and flag it."""
+    z = num(m.get("z"))
+    if z is not None:
+        return z, False
+    for v in (num(m.get("pz")), first_level(m.get("b")), first_level(m.get("a"))):
+        if v is not None and v > 0:
+            return v, True
+    return None, False
+
+
 def parse_mis(messages):
-    """MIS msgArray -> {code: quote}. z is the last trade ('-' before the
-    first trade), y the previous close, v the cumulative volume in lots."""
+    """MIS msgArray -> {code: quote}. y is the previous close, v the
+    cumulative volume in lots; the price comes from mis_price()."""
     out = {}
     for m in messages:
         code = m.get("c")
         if not code:
             continue
-        last, prev = num(m.get("z")), num(m.get("y"))
+        (last, est), prev = mis_price(m), num(m.get("y"))
         chg = pct = None
         if last is not None and prev not in (None, 0):
             chg = round(last - prev, 2)
@@ -175,7 +193,7 @@ def parse_mis(messages):
         out[code] = {"last": last, "prev": prev, "chg": chg, "pct": pct,
                      "open": num(m.get("o")), "high": num(m.get("h")),
                      "low": num(m.get("l")), "vol": num(m.get("v"), 0),
-                     "time": m.get("t") or m.get("ot")}
+                     "time": m.get("t") or m.get("ot"), "est": est}
     return out
 
 
@@ -215,7 +233,7 @@ def quote_item(live, base):
     q = {"live": last is not None}
     if last is not None:
         q.update({k: live.get(k) for k in
-                  ("last", "prev", "chg", "pct", "open", "high", "low", "vol", "time")})
+                  ("last", "prev", "chg", "pct", "open", "high", "low", "vol", "time", "est")})
     else:
         pc, ch = base.get("pc"), base.get("ch")
         q["last"] = pc
