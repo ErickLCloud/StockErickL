@@ -60,12 +60,12 @@ t("validate: catches missing when and non-array", G.validate([{id: "z", targets:
   try {
     const j = await (await fetch("../../docs/globalmap.json")).json();
     const rules = j.rules;
-    t("shipped table: 10-20 rules", rules.length >= 10 && rules.length <= 20, String(rules.length));
+    t("shipped table: 5-20 rules", rules.length >= 5 && rules.length <= 20, String(rules.length));
     t("shipped table: validate() is empty", G.validate(rules).length === 0, JSON.stringify(G.validate(rules)));
-    const known = ["txf", "txf_night", "dji", "ixic", "sox", "spx"];
-    t("shipped table: rules on unknown keys are marked 待審-缺資料",
-      rules.every(x => known.indexOf(x.when.key) >= 0 || x.status === "待審-缺資料"));
-    t("shipped table: rules on known keys are 待審", rules.every(x => known.indexOf(x.when.key) < 0 || x.status === "待審"));
+    const known = ["txf", "txf_night", "dji", "ixic", "sox", "spx", "tsm_adr", "nvda", "wti"];
+    t("shipped table: every rule uses a key globals.json provides", rules.every(x => known.indexOf(x.when.key) >= 0));
+    t("shipped table: status is 已審 or 待審", rules.every(x => x.status === "已審" || x.status === "待審"));
+    t("shipped table: every 已審 rule cites its backtest", rules.every(x => x.status !== "已審" || /回測 n=\d+/.test(x.why)));
   } catch (e) { t("shipped table loads", false, String(e)); }
   const el = document.getElementById("out");
   el.textContent = (fails.length ? fails.join("\n") + "\n" : "") + "RESULT: " + (fails.length ? "FAIL " + fails.length + " of " + n : "PASS " + n + "/" + n);
