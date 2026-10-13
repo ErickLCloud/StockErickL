@@ -26,7 +26,7 @@ import threading
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SUITES = ["selftest.html", "analysis_selftest.html", "e2e.html", "e2e_analysis.html"]
+SUITES = ["selftest.html", "analysis_selftest.html", "globalmap_selftest.html", "e2e.html", "e2e_analysis.html"]
 NEEDS = ["index.json", "quotes.json", "fundamental.json", "indicators.json", "closes.json"]
 CANDIDATES = ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "msedge",
               r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",

@@ -91,6 +91,20 @@ jobs:
           # non-zero otherwise, so a partial build can never replace good data.
           cp -r _hist/. _site/data/
 
+      # Monthly revenue / EPS / gross margin. The endpoints only serve the latest
+      # period, so earlier period snapshots are restored from the data branch and
+      # merged (late reporters are added). Written into _hist so they ride along
+      # with the history push; copied into the site either way.
+      - name: Rebuild financials (daily)
+        if: env.MODE == 'full'
+        continue-on-error: true
+        run: |
+          mkdir -p _hist/financials
+          if [ -d _site/data/financials ]; then cp -rn _site/data/financials/. _hist/financials/; fi
+          python -u scripts/build_web_data.py financials --out _hist
+          cp _hist/financials.json _site/data/
+          mkdir -p _site/data/financials && cp -r _hist/financials/. _site/data/financials/
+
       - name: Publish the new history to the data branch
         if: env.MODE == 'full' && steps.history.outcome == 'success'
         env:

@@ -338,6 +338,8 @@ async function until(fn, ms) { const end = Date.now() + (ms || 15000); while (Da
     const Sx = w.eval("S");
     $("tab-home").click(); await sleep(100);
     t("home tab shows the four boxes and the index cards", d.querySelectorAll(".home-grid > .home-box").length === 4 && !!d.querySelector(".newslist, .home-box h3") && !!d.querySelector('.idxcard[data-idx="加權指數"]'));
+    t("rule-only indicators (TSM ADR, NVDA, WTI) are not index cards", !d.querySelector('.idxcard[data-idx="輝達"]') && !d.querySelector('.idxcard[data-idx="WTI 原油"]'));
+    t("the 國際連動 box sits outside the four-box grid", [...d.querySelectorAll(".home-box h3")].some((h) => h.textContent.startsWith("國際連動")) && ![...d.querySelectorAll(".home-grid > .home-box h3")].some((h) => h.textContent.startsWith("國際連動")));
     const stocks = (board) => Sx.index.filter((i) => i.k !== "ETF" && i.b === board).map((i) => ({ i, q: Sx.quotes[i.c] })).filter((x) => x.q && x.q.pct != null && x.q.last > 0);
     let rows = stocks("TWSE");
     const bars = [...d.querySelectorAll(".dist > div")].map((x) => +x.querySelector("b").textContent);

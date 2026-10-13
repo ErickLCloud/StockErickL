@@ -1,0 +1,74 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>globalmap.js selftest</title>
+<body>
+<pre id="out">running…</pre>
+<script src="../../docs/globalmap.js"></script>
+<script>
+"use strict";
+/* Run: msedge --headless=new --virtual-time-budget=5000 --dump-dom http://127.0.0.1:PORT/tests/web/globalmap_selftest.html
+ * Fixtures are inline; only docs/globalmap.json is fetched (for the validate-the-shipped-table check). */
+const G = window.GlobalMap, fails = [];
+let n = 0;
+function t(name, ok, detail) { n++; if (!ok) fails.push(name + (detail ? "  -> " + detail : "")); }
+const R = (id, key, op, pct, extra) => Object.assign({id, when: {key, op, pct}, targets: [{type: "theme", name: "T1"}], dir: "up", why: "w", status: "待審"}, extra || {});
+const gl = {items: [{key: "sox", pct: 2}, {key: "ixic", pct: -1.5}, {key: "spx", pct: null}, {key: "dji", pct: 0.3}]};
+
+/* ---- evaluate */
+let r = G.evaluate([R("a", "sox", ">=", 2)], gl);
+t("evaluate: boundary equal triggers (>=)", r.length === 1 && r[0].value === 2 && r[0].dir === "up");
+r = G.evaluate([R("a", "sox", ">=", 2.01)], gl);
+t("evaluate: just below threshold does not trigger", r.length === 0 && r.skipped.length === 0);
+r = G.evaluate([R("a", "ixic", "<=", -1.5)], gl);
+t("evaluate: boundary equal triggers (<=)", r.length === 1);
+r = G.evaluate([R("a", "ixic", "<=", -1.51)], gl);
+t("evaluate: <= not met", r.length === 0);
+r = G.evaluate([R("a", "dji", ">=", 1), R("b", "dji", "<=", 1)], gl);
+t("evaluate: only matching op triggers", r.length === 1 && r[0].rule.id === "b");
+r = G.evaluate([R("a", "wti", ">=", 1), R("b", "sox", ">=", 1)], gl);
+t("evaluate: missing key skipped and reported", r.length === 1 && r.skipped.length === 1 && r.skipped[0].reason === "missing:wti" && r.skipped[0].rule.id === "a");
+r = G.evaluate([R("a", "spx", ">=", -9)], gl);
+t("evaluate: null pct treated as missing", r.length === 0 && r.skipped.length === 1);
+r = G.evaluate([{id: "bad"}], gl);
+t("evaluate: malformed rule skipped, no throw", r.length === 0 && r.skipped[0].reason === "malformed");
+r = G.evaluate([R("a", "sox", ">=", 1)], null);
+t("evaluate: null globals -> all skipped", r.length === 0 && r.skipped.length === 1);
+r = G.evaluate([R("a", "sox", ">=", 1)], {sox: {pct: 5}});
+t("evaluate: accepts {key:{pct}} map", r.length === 1);
+
+/* ---- resolveTargets */
+const idx = {items: [{c: "2330", s: "半導體業"}, {c: "2303", s: "半導體業"}, {c: "2882", s: "金融保險"}, {c: "2603", s: "航運業"}]};
+const th = {themes: [{name: "晶圓代工", codes: ["2330", "2303", "9999"]}, {name: "金控", codes: ["2882"]}]};
+t("resolve: theme drops codes not in index", JSON.stringify(G.resolveTargets([{type: "theme", name: "晶圓代工"}], idx, th)) === '["2330","2303"]');
+t("resolve: sector by industry name", JSON.stringify(G.resolveTargets([{type: "sector", name: "半導體業"}], idx, th)) === '["2330","2303"]');
+t("resolve: code target", JSON.stringify(G.resolveTargets([{type: "code", name: "2603"}], idx, th)) === '["2603"]');
+t("resolve: unknown names skipped", G.resolveTargets([{type: "theme", name: "不存在"}, {type: "sector", name: "無此業"}, {type: "code", name: "0000"}], idx, th).length === 0);
+t("resolve: de-duplicates across targets", JSON.stringify(G.resolveTargets([{type: "theme", name: "晶圓代工"}, {type: "sector", name: "半導體業"}], idx, th)) === '["2330","2303"]');
+t("resolve: empty/garbage input is safe", G.resolveTargets(null, null, null).length === 0 && G.resolveTargets([null, {}], idx, th).length === 0);
+
+/* ---- validate */
+t("validate: good rule -> []", G.validate([R("a", "sox", ">=", 1)]).length === 0);
+t("validate: catches bad op", G.validate([R("a", "sox", ">", 1)]).length === 1);
+t("validate: catches non-number pct", G.validate([R("a", "sox", ">=", "2")]).length === 1);
+t("validate: catches bad dir", G.validate([R("a", "sox", ">=", 1, {dir: "flat"})]).length === 1);
+t("validate: catches missing why/status", G.validate([R("a", "sox", ">=", 1, {why: "", status: undefined})]).length === 2);
+t("validate: catches empty targets and bad target type", G.validate([R("a", "sox", ">=", 1, {targets: []})]).length === 1 && G.validate([R("a", "sox", ">=", 1, {targets: [{type: "x", name: "y"}]})]).length === 1);
+t("validate: catches duplicate id", G.validate([R("a", "sox", ">=", 1), R("a", "sox", "<=", -1)]).length === 1);
+t("validate: catches missing when and non-array", G.validate([{id: "z", targets: [{type: "code", name: "1"}], dir: "up", why: "w", status: "s"}]).length >= 1 && G.validate(null).length === 1);
+
+(async () => {
+  try {
+    const j = await (await fetch("../../docs/globalmap.json")).json();
+    const rules = j.rules;
+    t("shipped table: 10-20 rules", rules.length >= 10 && rules.length <= 20, String(rules.length));
+    t("shipped table: validate() is empty", G.validate(rules).length === 0, JSON.stringify(G.validate(rules)));
+    const known = ["txf", "txf_night", "dji", "ixic", "sox", "spx"];
+    t("shipped table: rules on unknown keys are marked 待審-缺資料",
+      rules.every(x => known.indexOf(x.when.key) >= 0 || x.status === "待審-缺資料"));
+    t("shipped table: rules on known keys are 待審", rules.every(x => known.indexOf(x.when.key) < 0 || x.status === "待審"));
+  } catch (e) { t("shipped table loads", false, String(e)); }
+  const el = document.getElementById("out");
+  el.textContent = (fails.length ? fails.join("\n") + "\n" : "") + "RESULT: " + (fails.length ? "FAIL " + fails.length + " of " + n : "PASS " + n + "/" + n);
+})();
+</script>
+</body>

@@ -505,8 +505,10 @@ def test_build_globals_drops_a_failing_source_and_names_it(tmp_path):
             return _taifex([])
         return _taifex([{"SymbolID": "TXFJ6-F", "CLastPrice": "49979", "CDiff": "-103", "CDiffRate": "-0.21", "CDate": "20261007", "CTime": "134500"}])
     g = bw.build_globals(tmp_path, fetch=fetch, post=post)
-    assert [i["key"] for i in g["items"]] == ["txf", "dji", "ixic", "spx"]
+    assert [i["key"] for i in g["items"]] == ["txf", "dji", "ixic", "spx", "tsm_adr", "nvda", "wti"]
     assert g["errors"] == ["txf_night", "sox"]
+    # rule inputs are flagged so the home page does not show them as index cards
+    assert [i["key"] for i in g["items"] if i.get("x")] == ["tsm_adr", "nvda", "wti"]
     assert json.loads((tmp_path / "globals.json").read_text(encoding="utf-8"))["items"][0]["name"] == "台指期"
 
 

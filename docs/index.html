@@ -233,6 +233,7 @@
   .dist > div{flex:1; text-align:center; font-size:11.5px; display:flex; flex-direction:column; justify-content:flex-end; height:100%}
   .dist .b{display:block; width:100%; border-radius:2px 2px 0 0; min-height:2px}
   .ratio{display:flex; height:10px; border-radius:5px; overflow:hidden; margin-top:10px}
+  .gmrow{display:grid; grid-template-columns:auto 1fr auto auto; gap:8px; align-items:baseline; padding:5px 0 2px; font-size:13px}
   .hotrow{display:grid; grid-template-columns:1fr 62px 62px 76px; gap:6px; padding:5px 0; font-size:13px; cursor:pointer; border-bottom:1px solid rgba(128,128,128,.18)}
   .hotrow:hover{background:var(--hover)}
   .hotrow > span:not(:first-child){text-align:right}
@@ -300,6 +301,7 @@
 
 <script src="live-config.js"></script>
 <script src="calc.js"></script>
+<script src="globalmap.js"></script>
 <script src="analysis.js"></script>
 <script>
 "use strict";
@@ -394,9 +396,11 @@ async function boot(){
       '直接以 file:// 開啟會被瀏覽器擋下。</div>';
     return;
   }
-  const [ind, fund, mk, meta, evs, glb, nws] = await Promise.all(
-    [opt("data/indicators.json"), opt("data/fundamental.json"), opt("data/market.json"), opt("data/meta.json"), opt("data/events.json"), opt("data/globals.json"), opt("data/news.json")]);
+  const [ind, fund, mk, meta, evs, glb, nws, fin, gmap, ths] = await Promise.all(
+    [opt("data/indicators.json"), opt("data/fundamental.json"), opt("data/market.json"), opt("data/meta.json"), opt("data/events.json"), opt("data/globals.json"), opt("data/news.json"),
+     opt("data/financials.json"), opt("globalmap.json"), S.themes ? Promise.resolve(S.themes) : opt("themes.json")]);
   S.events = evs; S.globals = glb; S.news = nws;
+  S.fin = fin; S.gmap = gmap; if(ths && !S.themes) S.themes = ths;
   S.ind = (ind && ind.items) || {};
   S.fund = (fund && fund.items) || {};
   S.market = mk; S.meta = meta;
@@ -520,6 +524,19 @@ async function select(code, scroll){
   if(S.sel === code) paintCurrent();
 }
 
+/* 財報 (data/financials.json, rebuilt daily): [月營收(千元), 月增%, 年增%, 累計年增%, EPS(年初至今), 毛利率%] */
+function finHtml(code){
+  const F = S.fin, r = F && F.items && F.items[code];
+  if(!r) return F ? '<div class="sub">財報：這檔沒有月營收／季報資料（可能是新上市或金融業格式不同）。</div>' : "";
+  const cell = (k, v, c) => '<div class="cell"><div class="k">' + k + '</div><div class="v' + (c ? " " + c : "") + '">' + v + '</div></div>';
+  const pc = (v) => v == null ? "—" : sign(v) + "%";
+  const ym = F.rev_month || "", ep = F.eps_period || "";
+  return '<div class="sub">財報（月營收 ' + esc(ym) + '；EPS 與毛利率 ' + esc(ep) + (F.eps_basis === "累計" ? "，年初至今累計" : "") + '）</div>' +
+    '<div class="grid">' + cell("月營收(億)", r[0] == null ? "—" : (r[0] / 1e5).toFixed(2)) + cell("月增", pc(r[1]), cls(r[1])) +
+    cell("年增", pc(r[2]), cls(r[2])) + cell("累計年增", pc(r[3]), cls(r[3])) +
+    cell("EPS", n2(r[4])) + cell("毛利率 %", n2(r[5])) + '</div>';
+}
+
 function paintDetail(code){
   const it = S.byCode[code] || {c:code, n:"", b:"", k:""};
   const q = S.quotes[code] || {}, d = infoFor(code), c = cls(q.pct), on = S.watch.has(code);
@@ -529,7 +546,7 @@ function paintDetail(code){
   let fundHtml = "";
   if(it.k === "ETF") fundHtml = '<div class="sub">ETF 沒有本益比等基本面資料（TWSE 未提供）。</div>';
   else fundHtml = '<div class="grid">' + cell("本益比", f ? n2(f[0]) : "—") +
-        cell("殖利率 %", f ? n2(f[1]) : "—") + cell("股價淨值比", f ? n2(f[2]) : "—") + '</div>';
+        cell("殖利率 %", f ? n2(f[1]) : "—") + cell("股價淨值比", f ? n2(f[2]) : "—") + '</div>' + finHtml(code);
 
   const gap = d.gap ? '<div class="alert">⚠ 價格序列在 <strong>' + esc(d.gap.date) + '</strong> 出現異常跳空（前後收盤比約 ' +
     esc(d.gap.ratio) + ' 倍）：可能是分割、反分割、減資，也可能是資料錯誤，無法由資料判斷。' +
@@ -1277,6 +1294,29 @@ function paintSector(){
     '「產業別」是證交所／櫃買中心的分類，「題材」是自訂清單（themes.json，草稿，可自行增修）；同一檔可同時屬於產業與多個題材。點一列展開成分股。</div>' + DISCLAIMER + '</div>';
 }
 
+/* ---- 0. home: 國際連動 (docs/globalmap.json rules on data/globals.json). Rules are human judgement, marked until reviewed. */
+function globalMapHtml(){
+  const rules = (S.gmap && S.gmap.rules) || [];
+  if(!rules.length || !window.GlobalMap) return "";
+  const G = window.GlobalMap, items = (S.globals && S.globals.items) || [];
+  const nameOf = Object.fromEntries(items.map((g) => [g.key, g.name]));
+  const hits = G.evaluate(rules, S.globals);
+  const pending = (r) => r.status !== "已審";
+  const rows = hits.map((h) => {
+    const n = G.resolveTargets(h.targets, S.index, S.themes).length;
+    return '<div class="gmrow" title="' + esc(h.rule.why) + '"><span>' + esc(nameOf[h.rule.when.key] || h.rule.when.key) + ' <b class="' + cls(h.value) + '">' + sign(h.value) + '%</b></span>' +
+      '<span>' + h.targets.map((t) => esc(t.name)).join("、") + ' <span class="flat">(' + n + ' 檔)</span></span>' +
+      '<b class="' + (h.dir === "up" ? "up" : "down") + '">' + (h.dir === "up" ? "偏多" : "偏空") + '</b>' +
+      (pending(h.rule) ? '<span class="tag">待審</span>' : '<span></span>') + '</div>' +
+      '<div class="note" style="margin:0 0 6px">' + esc(h.rule.why) + '</div>';
+  }).join("");
+  const nPend = rules.filter(pending).length, nSkip = (hits.skipped || []).length;
+  return '<div class="home-box" style="margin-top:14px"><h3>國際連動</h3>' +
+    (rows || '<div class="empty" style="padding:18px">目前沒有規則被觸發（國際指標漲跌都在門檻內）。</div>') +
+    '<div class="note">依 ' + rules.length + ' 條自訂規則比對最近一個交易日的國際指標' + (nSkip ? "；" + nSkip + " 條缺資料未判斷" : "") + '。' +
+    (nPend ? '<strong>' + nPend + ' 條規則尚未審核</strong>，是經驗假設不是預測，請勿單獨作為買賣依據。' : "") + '</div></div>';
+}
+
 /* ---- 0. home */
 const HOME_BUCKETS = [
   ["漲停", (p) => p >= 9.5, "up", 1], [">5%", (p) => p >= 5 && p < 9.5, "up", .8], ["2~5%", (p) => p >= 2 && p < 5, "up", .6],
@@ -1307,7 +1347,7 @@ function paintHome(){
   };
   const idxCard = (name, x, note, sp) => '<div class="idxcard" data-idx="' + esc(name) + '"><span class="flat" style="font-size:13px">' + name + '</span><span class="v ' + cls(x.chg) + '">' + n2(x.close != null ? x.close : x.price) + '</span><span class="' + cls(x.chg) + '">' +
     sign(x.chg) + ' (' + sign(x.pct) + '%)</span>' + (sp || "") + (note ? '<span class="flat" style="font-size:11.5px;display:block">' + note + '</span>' : "") + '</div>';
-  const glob = ((S.globals && S.globals.items) || []).map((g) => idxCard(esc(g.name), g, g.time ? esc(g.time.slice(5)) + "（台北時間）" : "", spark(g.spark, g.chg >= 0))).join("");
+  const glob = ((S.globals && S.globals.items) || []).filter((g) => !g.x).map((g) => idxCard(esc(g.name), g, g.time ? esc(g.time.slice(5)) + "（台北時間）" : "", spark(g.spark, g.chg >= 0))).join("");
   const idx = mk && mk.close != null
     ? idxCard("加權指數", mk, mk.time ? "即時 " + esc(mk.time) : "") + (mk.otc ? idxCard("櫃買指數", mk.otc, mk.otc.time ? "即時 " + esc(mk.otc.time) : esc(mk.otc.date) + " 盤後") : "") + glob
     : '<div class="empty">指數資料尚未載入。</div>';
@@ -1369,7 +1409,7 @@ function paintHome(){
     '<div class="home-box"><h3>個股漲跌分布</h3>' + dist + '</div>' +
     '<div class="home-box"><h3>熱門股<span>' + chip("data-home-hot", "pct", "漲幅排行", h.hot === "pct") + chip("data-home-hot", "vol", "成交量排行", h.hot === "vol") + '</span></h3>' + hotHtml + '</div>' +
     '<div class="home-box"><h3>我的關注<span>' + chip("data-home-mine", "watch", "自選股", h.mine === "watch") + chip("data-home-mine", "hold", "庫存股", h.mine === "hold") + '</span></h3>' + mineHtml + '</div>' +
-    '</div>' + newsHtml + '<div class="note">產業類股為該板個股今日漲跌的等權平均（成分股至少 5 檔才列入）；熱門股是依最近一次報價（約每 5 分鐘更新）排序的漲幅／成交量排行，不是逐筆的「瞬間」爆量。個股不含 ETF。</div>' + DISCLAIMER + '</div>';
+    '</div>' + globalMapHtml() + newsHtml + '<div class="note">產業類股為該板個股今日漲跌的等權平均（成分股至少 5 檔才列入）；熱門股是依最近一次報價（約每 5 分鐘更新）排序的漲幅／成交量排行，不是逐筆的「瞬間」爆量。個股不含 ETF。</div>' + DISCLAIMER + '</div>';
 }
 
 /* ---- 4. backtest */

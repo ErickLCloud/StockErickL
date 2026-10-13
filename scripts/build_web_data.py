@@ -376,6 +376,8 @@ def build_events(out, fetch=None, today=None):
 # optional: one that fails drops its card (and is named in `errors`), it never fails the build.
 YAHOO_CHART = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range=1d&interval=5m"
 US_INDICES = (("dji", "道瓊", "%5EDJI"), ("ixic", "NASDAQ", "%5EIXIC"), ("sox", "費城半導體", "%5ESOX"), ("spx", "S&P 500", "%5EGSPC"))
+# Inputs for the 國際連動 rules (docs/globalmap.json), not index cards: flagged "x" so the home page skips them.
+US_DRIVERS = (("tsm_adr", "台積電 ADR", "TSM"), ("nvda", "輝達", "NVDA"), ("wti", "WTI 原油", "CL%3DF"))
 TAIFEX_QUOTES = "https://mis.taifex.com.tw/futures/api/getQuoteList"
 TAIFEX_BODY = {"SymbolType": "F", "KindID": "1", "CID": "TXF", "ExpireMonth": "", "RowSize": "全部",
                "PageNo": "", "SortColumn": "", "AscDesc": "A"}
@@ -438,13 +440,13 @@ def build_globals(out, fetch=None, post=None):
             items.append(dict(got, key=key, name=name))
         else:
             errors.append(key)
-    for key, name, sym in US_INDICES:
+    for key, name, sym, extra in [(*t, False) for t in US_INDICES] + [(*t, True) for t in US_DRIVERS]:
         try:
             got = parse_yahoo_chart(fetch(YAHOO_CHART.format(sym=sym)))
         except Exception:
             got = None
         if got:
-            items.append(dict(got, key=key, name=name))
+            items.append(dict(got, key=key, name=name, **({"x": True} if extra else {})))
         else:
             errors.append(key)
     g = {"updated": stamp(), "items": items, "errors": errors}
@@ -709,9 +711,18 @@ def build_history(out):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("mode", choices=("quotes", "history", "all"))
+    ap.add_argument("mode", choices=("quotes", "history", "financials", "all"))
     ap.add_argument("--out", default=str(DEFAULT_OUT))
     args = ap.parse_args(argv)
+    if args.mode == "financials":
+        # Daily, not every 5 minutes: the endpoints take minutes and change once a day at most.
+        # Period snapshots accumulate in <out>/financials/ (the caller restores earlier ones there).
+        from scripts.financials import build_financials, period_items, save_snapshot
+        doc = build_financials(args.out)
+        saved = save_snapshot(period_items(doc), Path(args.out) / "financials")
+        print("financials:", len(doc["items"]), "codes,", doc["rev_month"], doc["eps_period"],
+              "errors:", doc["errors"], "snapshots updated:", saved)
+        return 0
     if args.mode in ("quotes", "all"):
         print("quotes :", build_quotes(args.out))
     if args.mode in ("history", "all"):
