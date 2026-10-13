@@ -24,6 +24,7 @@ import os
 import re
 import statistics
 import sys
+import urllib.error
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -299,7 +300,13 @@ def main(argv=None):
     ap.add_argument("--out", required=True)
     ap.add_argument("--dry-run", action="store_true", help="print the request body; no API call")
     a = ap.parse_args(argv)
-    run(a.out, dry_run=a.dry_run)
+    try:
+        run(a.out, dry_run=a.dry_run)
+    except urllib.error.HTTPError as e:
+        # The API explains a 400 in the body (bad request, credit balance, ...); a 401 from the token
+        # exchange is deliberately opaque, its reason is in the Console's workload identity history.
+        body = e.read().decode("utf-8", "replace")[:800]
+        sys.exit(f"HTTP {e.code} from {e.url}: {body}")
 
 
 if __name__ == "__main__":
