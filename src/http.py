@@ -87,9 +87,9 @@ def fetch_xml(url: str, timeout: int = _TIMEOUT) -> ET.Element:
     return ET.fromstring(fetch_bytes(url, timeout))
 
 
-def post_json(url: str, body: dict, timeout: int = _TIMEOUT):
+def post_json(url: str, body: dict, timeout: int = _TIMEOUT, headers: dict = None):
     """POST `body` as JSON and parse the JSON reply. Same TLS context and retry rules as fetch_bytes.
-    TAIFEX's quote service only answers POST."""
+    TAIFEX's quote service only answers POST; the Claude API needs extra headers."""
     req = urllib.request.Request(url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"), method="POST",
-                                 headers={"User-Agent": _UA, "Content-Type": "application/json"})
+                                 headers={"User-Agent": _UA, "Content-Type": "application/json", **(headers or {})})
     return json.loads(_read(req, timeout))

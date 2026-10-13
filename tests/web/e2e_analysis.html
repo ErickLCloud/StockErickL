@@ -413,6 +413,29 @@ async function until(fn, ms) { const end = Date.now() + (ms || 15000); while (Da
     d.querySelector('[data-home-news="us"]').click();
     t("news: an empty group says so", /目前沒有抓到新聞/.test(d.querySelector(".newslist") ? "" : $("detail").textContent));
     Sx.news = n0; $("tab-home").click();
+    /* 盤前解讀（AI） */
+    const i0 = Sx.interp, keepW2 = new Set(Sx.watch);
+    const ipBox = () => [...d.querySelectorAll(".home-box")].find((b) => b.querySelector("h3") && b.querySelector("h3").textContent.startsWith("盤前解讀"));
+    Sx.interp = null; $("tab-home").click(); await sleep(50);
+    t("interpret: no interpret.json, no box", !ipBox());
+    Sx.watch.clear(); Sx.watch.add("2330");
+    Sx.interp = { date: "2000-01-03", generated: "2000-01-03T08:05:00+08:00", model: "claude-sonnet-5-5", summary: "費半<b>重挫</b>。",
+      items: [{ theme: "晶圓代工", dir: "down", why: "費半跌", refs: ["g:sox", "n1", "r:sox-down-semi"], vs_rule: "agree" },
+              { theme: "散熱", dir: "up", why: "水冷", refs: ["n2"], vs_rule: "differ" }],
+      news: [{ id: "n1", t: "費半重挫", p: "P", l: "https://example.com/n1" }, { id: "n2", t: "壞連結", p: "P", l: "javascript:alert(1)" }],
+      indicators: { "g:sox": { name: "費城半導體", pct: -2.67 } } };
+    $("tab-home").click(); await sleep(50);
+    const ib = ipBox(), itxt = ib ? ib.textContent : "";
+    t("interpret: box shown below 國際連動, outside the four-box grid", !!ib && !ib.closest(".home-grid") &&
+      [...d.querySelectorAll(".home-box h3")].map((h) => h.textContent.slice(0, 4)).join().includes("國際連動,盤前解讀"));
+    t("interpret: an old file is labelled with its date", /2000-01-03，不是今天的/.test(itxt));
+    t("interpret: summary is text, never HTML", itxt.includes("費半<b>重挫</b>。") && !ib.querySelector("p b"));
+    t("interpret: rows show direction, theme and the rule comparison", ib.querySelectorAll(".iprow").length === 2 && /偏空晶圓代工/.test(itxt.replace(/\s+/g, "")) && /與規則不同/.test(itxt));
+    t("interpret: your stock in the theme is flagged; others are not", /你的持股／自選：2330/.test(itxt) && ib.querySelectorAll(".iprow .tag").length === 2);
+    t("interpret: refs resolve to an indicator and a safe link; a bad link is plain text",
+      /費城半導體 -2\.67%/.test(itxt) && ib.querySelector('a[href="https://example.com/n1"]').rel.includes("noopener") && !ib.querySelector('a[href^="javascript"]'));
+    t("interpret: marked as AI and unverified", /AI 產生、未經驗證/.test(itxt));
+    Sx.interp = i0; Sx.watch.clear(); keepW2.forEach((c) => Sx.watch.add(c)); $("tab-home").click();
     t("no NaN/undefined in the home view", (() => { $("tab-home").click(); return !/NaN|undefined|Infinity/.test($("detail").textContent); })());
   }
 

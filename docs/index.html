@@ -234,6 +234,7 @@
   .dist .b{display:block; width:100%; border-radius:2px 2px 0 0; min-height:2px}
   .ratio{display:flex; height:10px; border-radius:5px; overflow:hidden; margin-top:10px}
   .gmrow{display:grid; grid-template-columns:auto 1fr auto auto; gap:8px; align-items:baseline; padding:5px 0 2px; font-size:13px}
+  .iprow{display:grid; grid-template-columns:auto 1fr auto; gap:8px; align-items:baseline; padding:5px 0 2px; font-size:13px}
   .hotrow{display:grid; grid-template-columns:1fr 62px 62px 76px; gap:6px; padding:5px 0; font-size:13px; cursor:pointer; border-bottom:1px solid rgba(128,128,128,.18)}
   .hotrow:hover{background:var(--hover)}
   .hotrow > span:not(:first-child){text-align:right}
@@ -396,10 +397,10 @@ async function boot(){
       '直接以 file:// 開啟會被瀏覽器擋下。</div>';
     return;
   }
-  const [ind, fund, mk, meta, evs, glb, nws, fin, gmap, ths] = await Promise.all(
+  const [ind, fund, mk, meta, evs, glb, nws, fin, gmap, ths, itp] = await Promise.all(
     [opt("data/indicators.json"), opt("data/fundamental.json"), opt("data/market.json"), opt("data/meta.json"), opt("data/events.json"), opt("data/globals.json"), opt("data/news.json"),
-     opt("data/financials.json"), opt("globalmap.json"), S.themes ? Promise.resolve(S.themes) : opt("themes.json")]);
-  S.events = evs; S.globals = glb; S.news = nws;
+     opt("data/financials.json"), opt("globalmap.json"), S.themes ? Promise.resolve(S.themes) : opt("themes.json"), opt("data/interpret.json")]);
+  S.events = evs; S.globals = glb; S.news = nws; S.interp = itp;
   S.fin = fin; S.gmap = gmap; if(ths && !S.themes) S.themes = ths;
   S.ind = (ind && ind.items) || {};
   S.fund = (fund && fund.items) || {};
@@ -1317,6 +1318,39 @@ function globalMapHtml(){
     (nPend ? '<strong>' + nPend + ' 條規則尚未審核</strong>，是經驗假設不是預測，請勿單獨作為買賣依據。' : "") + '</div></div>';
 }
 
+/* ---- 0. home: 盤前解讀（AI）, data/interpret.json from scripts/interpret.py (decisions D13, D15).
+ * Kept apart from 國際連動 on purpose: rules are backtested, this is not. Your holdings are matched
+ * here in the browser; they are never sent to the model. */
+function interpretHtml(){
+  const d = S.interp;
+  if(!d || !d.date) return "";
+  const today = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);
+  const own = new Set(ownCodes());
+  const news = Object.fromEntries((d.news || []).map((n) => [n.id, n]));
+  const ref = (r) => {
+    if(news[r] && /^https?:\/\//.test(news[r].l || "")) return '<a href="' + esc(news[r].l) + '" target="_blank" rel="noopener" title="' + esc(news[r].t) + '">' + esc(r) + '</a>';
+    const g = d.indicators && d.indicators[r];
+    if(g) return esc(g.name || r) + ' <span class="' + cls(g.pct) + '">' + sign(g.pct) + '%</span>';
+    return esc(r.replace(/^r:/, "規則 "));
+  };
+  const DIR = {up: ["up", "偏多"], down: ["down", "偏空"], watch: ["flat", "注意"]};
+  const rows = (d.items || []).map((it) => {
+    const th = ((S.themes && S.themes.themes) || []).find((t) => t.name === it.theme);
+    const mine = th ? th.codes.filter((c) => own.has(c)) : [];
+    const [c, label] = DIR[it.dir] || DIR.watch;
+    return '<div class="iprow"><b class="' + c + '">' + label + '</b><span>' + esc(it.theme) +
+      (mine.length ? ' <span class="tag">你的持股／自選：' + mine.map((x) => esc(x + " " + ((S.byCode[x] || {}).n || ""))).join("、") + '</span>' : "") + '</span>' +
+      (it.vs_rule === "differ" ? '<span class="tag">與規則不同</span>' : it.vs_rule === "agree" ? '<span class="flat">同規則</span>' : '<span></span>') + '</div>' +
+      '<div class="note" style="margin:0 0 6px">' + esc(it.why) + '　<span class="flat">依據：' + (it.refs || []).map(ref).join("、") + '</span></div>';
+  }).join("");
+  const stale = d.date !== today ? '（' + esc(d.date) + '，不是今天的）' : "";
+  return '<div class="home-box" style="margin-top:14px"><h3>盤前解讀（AI）' + stale + '</h3>' +
+    (d.summary ? '<p style="margin:4px 0 8px; font-size:14px">' + esc(d.summary) + '</p>' : "") +
+    (rows || '<div class="empty" style="padding:18px">今天沒有值得特別注意的題材。</div>') +
+    '<div class="note"><strong>AI 產生、未經驗證</strong>：' + esc(d.model || "") + ' 於 ' + esc((d.generated || "").slice(0, 16).replace("T", " ")) +
+    ' 依新聞標題、國際指標、已觸發規則與月營收寫成，只到題材層級，不是個股建議。「與規則不同」表示和上方回測過的規則方向相反。每天的解讀都會存檔，之後會統計準確率。</div></div>';
+}
+
 /* ---- 0. home */
 const HOME_BUCKETS = [
   ["漲停", (p) => p >= 9.5, "up", 1], [">5%", (p) => p >= 5 && p < 9.5, "up", .8], ["2~5%", (p) => p >= 2 && p < 5, "up", .6],
@@ -1409,7 +1443,7 @@ function paintHome(){
     '<div class="home-box"><h3>個股漲跌分布</h3>' + dist + '</div>' +
     '<div class="home-box"><h3>熱門股<span>' + chip("data-home-hot", "pct", "漲幅排行", h.hot === "pct") + chip("data-home-hot", "vol", "成交量排行", h.hot === "vol") + '</span></h3>' + hotHtml + '</div>' +
     '<div class="home-box"><h3>我的關注<span>' + chip("data-home-mine", "watch", "自選股", h.mine === "watch") + chip("data-home-mine", "hold", "庫存股", h.mine === "hold") + '</span></h3>' + mineHtml + '</div>' +
-    '</div>' + globalMapHtml() + newsHtml + '<div class="note">產業類股為該板個股今日漲跌的等權平均（成分股至少 5 檔才列入）；熱門股是依最近一次報價（約每 5 分鐘更新）排序的漲幅／成交量排行，不是逐筆的「瞬間」爆量。個股不含 ETF。</div>' + DISCLAIMER + '</div>';
+    '</div>' + globalMapHtml() + interpretHtml() + newsHtml + '<div class="note">產業類股為該板個股今日漲跌的等權平均（成分股至少 5 檔才列入）；熱門股是依最近一次報價（約每 5 分鐘更新）排序的漲幅／成交量排行，不是逐筆的「瞬間」爆量。個股不含 ETF。</div>' + DISCLAIMER + '</div>';
 }
 
 /* ---- 4. backtest */

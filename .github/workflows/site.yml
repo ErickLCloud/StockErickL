@@ -28,12 +28,13 @@ on:
   schedule:
     - cron: "*/5 1-6 * * 1-5"   # quotes, 09:00-14:55 Taipei, Mon-Fri
     - cron: "37 7 * * 1-5"      # history rebuild, 15:37 Taipei (after the close)
+    - cron: "0 0 * * 1-5"       # 盤前解讀 (AI), 08:00 Taipei
   workflow_dispatch:
     inputs:
       mode:
-        description: "quotes = prices only (fast); full = also rebuild history (~10 min)"
+        description: "quotes = prices only (fast); full = also rebuild history (~10 min); interpret = also write the AI pre-market note"
         type: choice
-        options: [quotes, full]
+        options: [quotes, full, interpret]
         default: quotes
 
 permissions:
@@ -49,8 +50,9 @@ jobs:
     timeout-minutes: 50
     permissions:
       contents: write           # push the `data` branch
+      id-token: write           # GitHub OIDC token, exchanged for a short-lived Anthropic token (interpret mode)
     env:
-      MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || (github.event.schedule == '37 7 * * 1-5' && 'full' || 'quotes') }}
+      MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || (github.event.schedule == '37 7 * * 1-5' && 'full' || (github.event.schedule == '0 0 * * 1-5' && 'interpret' || 'quotes')) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -110,6 +112,9 @@ jobs:
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # the AI notes live on the data branch too; carry them into the fresh single commit
+          if [ -f _site/data/interpret.json ]; then cp _site/data/interpret.json _hist/; fi
+          if [ -d _site/data/interpret ]; then mkdir -p _hist/interpret && cp -r _site/data/interpret/. _hist/interpret/; fi
           cd _hist
           git init -q -b data
           git config user.name  "github-actions[bot]"
@@ -137,6 +142,43 @@ jobs:
 
       - name: Refresh prices, index, fundamentals and TAIEX
         run: python scripts/build_web_data.py quotes --out _site/data
+
+      # 盤前解讀 (decisions D10-D15). No API key anywhere: the job's GitHub OIDC token is
+      # exchanged for a ~10-minute Anthropic token (Workload Identity Federation; the
+      # Console rule only trusts this repo's main branch). The script skips weekends,
+      # TWSE holidays and a second run on the same day. Never fails the build: the page
+      # keeps showing the previous note, labelled with its date.
+      - name: Pre-market AI note (interpret)
+        id: interpret
+        if: env.MODE == 'interpret'
+        continue-on-error: true
+        env:
+          ANTHROPIC_FEDERATION_RULE_ID: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}
+          ANTHROPIC_ORGANIZATION_ID: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}
+          ANTHROPIC_SERVICE_ACCOUNT_ID: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}
+          ANTHROPIC_IDENTITY_TOKEN_FILE: ${{ runner.temp }}/gha-jwt
+        run: |
+          curl -fsS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.anthropic.com" | jq -r .value > "$ANTHROPIC_IDENTITY_TOKEN_FILE"
+          python -u scripts/interpret.py --out _site/data
+
+      - name: Keep the AI note on the data branch
+        if: env.MODE == 'interpret' && steps.interpret.outcome == 'success'
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          [ -f _site/data/interpret.json ] || { echo "nothing new"; exit 0; }
+          git clone --quiet --depth 1 --branch data --single-branch \
+            "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" _push
+          mkdir -p _push/interpret
+          cp _site/data/interpret.json _push/ && cp -r _site/data/interpret/. _push/interpret/
+          cd _push
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && { echo "no change"; exit 0; }
+          git commit -q -m "interpret $(date -u +%Y-%m-%d)"
+          git push -q origin data
 
       # Checks the ASSEMBLED site: every script/stylesheet index.html references
       # must be present, and the market data must be complete. A failure here
