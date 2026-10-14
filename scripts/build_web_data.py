@@ -239,7 +239,7 @@ def quote_item(live, base):
     q = {"live": last is not None}
     if last is not None:
         q.update({k: live.get(k) for k in
-                  ("last", "prev", "chg", "pct", "open", "high", "low", "vol", "time", "est")})
+                  ("last", "prev", "chg", "pct", "open", "high", "low", "vol", "time", "est", "date")})
     else:
         pc, ch = base.get("pc"), base.get("ch")
         q["last"] = pc

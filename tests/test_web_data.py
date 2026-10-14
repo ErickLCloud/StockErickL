@@ -109,6 +109,13 @@ def test_parse_mis_ignores_messages_without_a_code():
 
 # --------------------------------------------------------------- quote_item
 
+def test_quote_item_carries_the_trade_date_end_to_end():
+    # the page draws today's candle only from a dated quote; a parser that reads the date
+    # is no use if quotes.json drops it
+    live = bw.parse_mis([{"c": "2330", "z": "2585", "y": "2575", "d": "20261014"}])["2330"]
+    assert bw.quote_item(live, {})["date"] == "2026-10-14"
+
+
 def test_quote_item_live():
     live = {"last": 116.5, "prev": 115.95, "chg": 0.55, "pct": 0.47, "open": 116.3,
             "high": 116.6, "low": 115.7, "vol": 65962, "time": "13:30:00"}
