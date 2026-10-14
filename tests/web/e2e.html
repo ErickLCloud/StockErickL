@@ -305,6 +305,32 @@ async function load(url) {
         t("a symbol with a price gap shows the warning (" + gapCode + ")", $("detail").textContent.includes("異常跳空") && $("detail").textContent.includes(ind.items[gapCode].gap.date));
       } else skip("gap warning", "no symbol with a gap in indicators.json");
     }
+    /* ---- 行事曆 */
+    {
+      const S2 = W.eval("S");
+      $("tab-cal").click();
+      await until(() => $("cal-list") && $("cal-list").textContent.length > 0, 10000);
+      t("calendar tab opens the calendar", !!$("cal-list") && $("tab-cal").getAttribute("aria-pressed") === "true");
+      $("detail").querySelector('[data-cal-scope="all"]').click(); await sleep(50);
+      $("detail").querySelector('[data-cal-days="30"]').click(); await sleep(50);
+      const want = W.Calc.calendarRows({ events: S2.events, conf: S2.conf, today: W.Calc.taipeiToday(), days: 30, only: null });
+      const shown = $("cal-list").querySelectorAll(".calrow").length;
+      t("all / 30 days lists what Calc.calendarRows returns (capped at 300)", shown === Math.min(want.length, 300), shown + " vs " + want.length);
+      $("detail").querySelector('[data-cal-type="法說會"]').click(); await sleep(50);
+      t("unticking 法說會 hides those rows", ![...$("cal-list").querySelectorAll(".caltype")].some((x) => x.textContent === "法說會"));
+      $("detail").querySelector('[data-cal-type="法說會"]').click(); await sleep(50);
+      const firstEx = want.find((r) => r.c);
+      if (firstEx) {
+        const term = $("cal-term"); term.value = firstEx.c; term.dispatchEvent(new W.Event("input", { bubbles: true })); await sleep(50);
+        const codes = [...$("cal-list").querySelectorAll("[data-cal-open]")].map((x) => x.dataset.calOpen);
+        t("search narrows to that code (deadline rows hidden while searching)", codes.length > 0 && codes.every((c) => c.includes(firstEx.c)) && !$("cal-list").textContent.includes("全體"), codes.join());
+        t("…and the search box keeps focus-able state (list repainted, box not)", $("cal-term") === term);
+        $("cal-list").querySelector("[data-cal-open]").click();
+        await until(() => S2.sel === firstEx.c && S2.view === "market");
+        t("clicking a row opens that stock", S2.sel === firstEx.c && S2.view === "market", S2.sel + " " + S2.view);
+        S2.cal.term = "";
+      } else skip("calendar search / open", "no dated events in the next 30 days");
+    }
     t("no script error at the end", !D.documentElement.hasAttribute("data-js-error"), D.documentElement.getAttribute("data-js-error"));
   } catch (e) {
     t("test harness did not crash", false, String(e && e.stack || e));

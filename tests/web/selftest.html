@@ -34,6 +34,7 @@ t("liveChannels maps boards and adds both indices, skips unknown",
 const lv = C.parseLive([{c: "2330", z: "1,010.00", y: "1000.00", o: "1000", h: "1012", l: "999", v: "5,000", t: "10:15:03"},
   {c: "2317", z: "-", y: "100", b: "-", a: "-"}, {c: "t00", z: "23000.5", y: "22900.5", t: "10:15:00"}, {c: "o00", z: "250", y: "255"}]);
 t("parseLive computes chg/pct and strips commas", lv.codes["2330"].last === 1010 && lv.codes["2330"].chg === 10 && lv.codes["2330"].pct === 1 && lv.codes["2330"].vol === 5000);
+t("parseLive keeps the trade date (YYYYMMDD -> ISO), null when absent", C.parseLive([{c: "2330", z: "1", y: "1", d: "20261014"}]).codes["2330"].date === "2026-10-14" && lv.codes["2330"].date === null);
 t("parseLive skips a symbol with no trade yet ('-')", !("2317" in lv.codes));
 t("parseLive splits out the indices", lv.twse.close === 23000.5 && lv.twse.chg === 100 && lv.otc.pct === -1.96, JSON.stringify(lv.otc));
 const lv2 = C.parseLive([{c: "2330", z: "-", pz: "-", y: "2540", b: "2500.0000_2495.0000_", a: "2505.0000_", tlong: "1791863293000"}]);
@@ -218,6 +219,20 @@ const out = document.getElementById("out");
   t("no events data: only the rule rows, no crash", C.upcomingEvents({ lots, kindOf, events: null, today: T, days: 30 }).map((r) => r.type).join() === "月營收");
   t("ETF-only holdings have no revenue / filing rows", C.upcomingEvents({ lots: [lots[1]], kindOf, events: null, today: T, days: 60 }).length === 0);
   t("an ex-dividend with no cash amount still shows (see the notice)", /詳見公告/.test(C.upcomingEvents({ lots, kindOf, events: { ex: [{ c: "2330", d: "2026-10-08", k: "除權", cash: null, stock: false }] }, today: T, days: 30 })[0].text));
+  /* the calendar page: every stock, not only the held ones */
+  {
+    const conf = { items: { "2330": [{ d: "2026-10-15", t: "14:00", p: "線上", m: "本公司2026年第3季財務報告及營運成果" }, { d: "2026-09-14", t: "08:00", m: "UBS 論壇" }],
+                            "2317": [{ d: "2026-10-09", t: "10:00", m: "參加券商論壇" }], "6488": [{ d: "2026-11-30", m: "法說會" }] } };
+    const cal = C.calendarRows({ events: ev, conf, today: T, days: 14 });
+    t("calendar: ex-dates of ALL stocks, conferences and the revenue deadline within 14 days, in date order (rules first on a day)",
+      cal.map((r) => r.date + r.type + (r.c || "")).join() === "2026-10-08除權息2330,2026-10-09除權息9999,2026-10-09法說會2317,2026-10-10財報,2026-10-15法說會2330,2026-10-20除權息0050",
+      cal.map((r) => r.date + r.type + (r.c || "")).join());
+    t("…a conference that announces results is flagged, one that does not is not", cal.find((r) => r.c === "2330" && r.type === "法說會").report && !cal.find((r) => r.c === "2317").report);
+    t("…the ex row keeps the kind and the cash amount", cal[0].kind === "除息" && cal[0].cash === 6);
+    t("only = my codes keeps their rows and the market-wide deadline rows", C.calendarRows({ events: ev, conf, today: T, days: 14, only: ["2330"] }).map((r) => r.type + (r.c || "")).join() === "除權息2330,財報,法說會2330");
+    t("30 days reaches no further than the horizon (11-14 filing deadline is 38 days out)", !C.calendarRows({ events: ev, conf, today: T, days: 30 }).some((r) => r.date > "2026-11-06"));
+    t("no data at all: just the deadline rows, no crash", C.calendarRows({ events: null, conf: null, today: T, days: 60 }).map((r) => r.type).join() === "財報,財報");
+  }
   t("the horizon is inclusive on day 0 and on the last day", C.upcomingEvents({ lots, kindOf, events: { ex: [{ c: "2330", d: T, k: "除息", cash: 1, stock: false }] }, today: T, days: 0 }).some((r) => r.type === "除息" && r.days === 0));
 }
 

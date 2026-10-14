@@ -37,6 +37,20 @@ t("clean drops non-positive closes", A.clean({ d: ["a", "b"], p: [0, 5] }).p.len
 const cx = A.clean({ d: ["d1", "d2", "d3", "d4"], p: [100, 10, 0, 12], o: [99, 9, 1, 11], h: [101, 11, 1, 13], l: [98, 8, 1, 10], v: [5, 6, 7, 8] }, { date: "d2" });
 t("clean carries o/h/l/v through the same cuts", JSON.stringify(cx) === JSON.stringify({ d: ["d2", "d4"], p: [10, 12], o: [9, 11], h: [11, 13], l: [8, 10], v: [6, 8] }), JSON.stringify(cx));
 t("clean without OHLC returns none (not empty arrays)", !("o" in A.clean({ d: ["a"], p: [5] })));
+/* ---- today's bar: the chart follows the board's quote until the evening rebuild */
+{
+  const h = { d: ["2026-10-12", "2026-10-13"], p: [100, 101], o: [99, 100], h: [102, 103], l: [98, 99], v: [10, 11] };
+  const q = { last: 104, open: 101, high: 105, low: 0, vol: 12, date: "2026-10-14" };
+  const wq = A.withQuote(h, q);
+  t("withQuote adds a newer trading day's quote as the last bar", wq.today && wq.d[2] === "2026-10-14" && wq.p[2] === 104 && wq.o[2] === 101 && wq.h[2] === 105 && wq.v[2] === 12);
+  t("…a missing (0) field becomes null so bars() repairs it from the close", wq.l[2] === null && A.bars(wq).bars[2].l <= 104);
+  t("…and the history itself is not modified", h.p.length === 2);
+  t("a quote of the history's last day is not added twice (morning snapshot of yesterday)", A.withQuote(h, Object.assign({}, q, { date: "2026-10-13" })) === h);
+  t("a quote without a trade date is not added (cannot tell which day it is)", A.withQuote(h, Object.assign({}, q, { date: null })) === h);
+  t("no price, no bar", A.withQuote(h, Object.assign({}, q, { last: null })) === h);
+  const co = A.withQuote({ d: ["2026-10-13"], p: [101] }, q);
+  t("close-only history stays close-only (no half-filled OHLC arrays)", co.p.length === 2 && !("o" in co));
+}
 const bx = A.bars({ d: ["a", "b"], p: [10, 12], o: [11, null], h: [9, 11], l: [10.5, 13], v: [100, null] });
 t("bars repairs a day: missing open -> close; high/low widened to contain open and close",
   bx.real && bx.bars[1].o === 12 && bx.bars[0].h === 11 && bx.bars[0].l === 10 && bx.bars[1].h === 12 && bx.bars[1].l === 12 && bx.bars[1].v === null, JSON.stringify(bx.bars));

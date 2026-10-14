@@ -88,6 +88,17 @@
     return Object.assign({ d, p }, extra);
   }
 
+  /* clean() plus the board's quote as today's bar, when the quote is from a later trading
+   * day than the history (history is rebuilt in the evening; quotes are intraday). The quote
+   * must carry its trade date, so a morning snapshot of yesterday's close is never added twice. */
+  function withQuote(c, q) {
+    if (!c || !q || !q.date || !(q.last > 0) || !(q.date > c.d[c.d.length - 1])) return c;
+    const out = { d: c.d.concat(q.date), p: c.p.concat(q.last), today: true };
+    const bar = { o: q.open, h: q.high, l: q.low, v: q.vol };
+    ["o", "h", "l", "v"].forEach((k) => { if (c[k]) out[k] = c[k].concat(bar[k] > 0 ? bar[k] : null); });
+    return out;
+  }
+
   /* Candles from a clean() result: one {d,o,h,l,c,v} per day. A day with no
    * open/high/low (or a high/low that does not contain the close) is repaired
    * from the close, and `real` says whether the series had OHLC at all. */
@@ -861,7 +872,7 @@
   const pct = (v) => v == null ? "—" : (v * 100).toFixed(1) + "%";
   const fpf = (v) => v == null ? "—" : v === Infinity ? "∞" : v.toFixed(2);
 
-  root.Analysis = { sma, ema, rsi, macd, vol, clean, weekly, pivots, levels, trend, analyze, riskPct,
+  root.Analysis = { sma, ema, rsi, macd, vol, clean, withQuote, weekly, pivots, levels, trend, analyze, riskPct,
     RULES_DEFAULT, normRules, isDefaultRules, SETUP_CHECKS, setupWhy, series, stateAt, snapshot, infoFromCloses,
     setupAt, setupTrades, baselineTrades, setupStats, validateMarket, validationVerdict,
     SCORE_WEIGHTS, VERDICT_AT, SECTOR_PERIODS, sectorGroups, periodReturn, memberReturns, sectorStats, bars, weeklyBars, clampView, zoomView, panView, lastView, barInfo, candidates, inScope, splitTerms, rejection, explain, evaluate, evaluateWhy, backtest, backtestReport, STRATS, COST_RT };

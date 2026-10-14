@@ -72,6 +72,13 @@ def test_parse_mis_computes_change_from_last_and_prev_close():
     assert q["vol"] == 18343 and q["time"] == "13:30:00"
 
 
+def test_parse_mis_keeps_the_trade_date():
+    # the chart adds the quote as today's bar only when it is a later day than the history,
+    # so a morning snapshot of yesterday's close must say it is yesterday's
+    q = bw.parse_mis([{"c": "2330", "z": "2585.0000", "y": "2575.0000", "d": "20261013"}, {"c": "2317", "z": "200"}])
+    assert q["2330"]["date"] == "2026-10-13" and q["2317"]["date"] is None
+
+
 def test_parse_mis_no_trade_yet_has_no_price_or_change():
     q = bw.parse_mis([{"c": "2330", "z": "-", "y": "2575.0000"}])["2330"]
     assert q["last"] is None and q["chg"] is None and q["pct"] is None

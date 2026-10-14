@@ -243,6 +243,24 @@ async function until(fn, ms) { const end = Date.now() + (ms || 15000); while (Da
     const wrap2 = d.getElementById("ch-wrap"); wrap2.focus(); const cur0 = CHx.cursor;
     wrap2.dispatchEvent(new w.KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true }));
     t("← moves the cursor one day back and pins it", CHx.cursor === cur0 - 1 && CHx.pinned);
+    /* today's bar: a quote from a later day than the history is drawn as the last candle */
+    {
+      const q0 = Sx.quotes[code], last = syn.d[syn.d.length - 1];
+      const next = new Date(Date.parse(last + "T00:00:00Z") + 864e5).toISOString().slice(0, 10);
+      Sx.quotes[code] = Object.assign({}, q0, { last: 123.45, open: 120, high: 125, low: 119, vol: 4321, date: next, time: "10:15:00", live: true });
+      w.eval("paintTA()");
+      const bs = CHx.data.bs, lb = bs[bs.length - 1];
+      t("a quote newer than the history adds today's candle at the end", bs.length === syn.d.length + 1 && lb.d === next && lb.c === 123.45 && lb.o === 120 && lb.v === 4321, bs.length + " " + JSON.stringify(lb));
+      t("…marked as intraday with the quote time", /今日盤中（報價 10:15:00）/.test(dock.textContent));
+      t("…and the verdict above is computed on the same bars (one source)", w.Analysis.analyze(w.Analysis.withQuote(w.Analysis.clean(syn), Sx.quotes[code])).total === CHx.an.total);
+      Sx.quotes[code] = Object.assign({}, Sx.quotes[code], { last: 130, high: 131 });
+      w.eval("paintTA()");
+      t("a new live price moves today's candle (no stale chart cache)", CHx.data.bs[CHx.data.bs.length - 1].c === 130 && CHx.data.bs.length === syn.d.length + 1);
+      Sx.quotes[code] = Object.assign({}, q0, { date: last });
+      w.eval("paintTA()");
+      t("a quote of the history's last day adds nothing", CHx.data.bs.length === syn.d.length && !/今日盤中/.test(dock.textContent));
+      Sx.quotes[code] = q0; w.eval("paintTA()");
+    }
     /* leaving the view hides the chart */
     $("tab-scan").click();
     t("the chart is hidden outside the analysis view", dock.hidden === true);
@@ -335,7 +353,7 @@ async function until(fn, ms) { const end = Date.now() + (ms || 15000); while (Da
     const side = d.querySelector(".side").getBoundingClientRect(), wrap = d.querySelector(".wrap").getBoundingClientRect(), fw = d.documentElement.clientWidth;
     t("the navigation sits above the content, not beside it", side.bottom <= wrap.top + 1 && side.width >= fw * 0.9, JSON.stringify([side.bottom, wrap.top, side.width, fw]));
     t("the content uses (nearly) the full width", wrap.width >= fw * 0.9, wrap.width + " of " + fw);
-    t("all seven tabs are in the bar, in order", [...d.querySelectorAll(".side .tab")].map((x) => x.id).join() === "tab-home,tab-market,tab-hold,tab-scan,tab-sector,tab-ta,tab-bt");
+    t("all eight tabs are in the bar, in order", [...d.querySelectorAll(".side .tab")].map((x) => x.id).join() === "tab-home,tab-market,tab-hold,tab-scan,tab-sector,tab-cal,tab-ta,tab-bt");
     t("the bar is compact on a desktop-width page (under 120px tall)", side.height < 120, side.height);
   }
 

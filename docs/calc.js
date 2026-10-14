@@ -149,7 +149,8 @@
       const pct = prev ? Math.round((last / prev - 1) * 10000) / 100 : null;
       if (m.c === "t00") out.twse = { close: last, chg, pct, time: m.t || null, at: f(m.tlong) };
       else if (m.c === "o00") out.otc = { close: last, chg, pct, time: m.t || null, at: f(m.tlong) };
-      else out.codes[m.c] = { live: true, est, last, prev, chg, pct, open: f(m.o), high: f(m.h), low: f(m.l), vol: f(m.v), time: m.t || null, at: f(m.tlong) };
+      else out.codes[m.c] = { live: true, est, last, prev, chg, pct, open: f(m.o), high: f(m.h), low: f(m.l), vol: f(m.v), time: m.t || null, at: f(m.tlong),
+                              date: /^\d{8}$/.test(m.d || "") ? m.d.slice(0, 4) + "-" + m.d.slice(4, 6) + "-" + m.d.slice(6) : null };
     }
     return out;
   }
@@ -289,6 +290,36 @@
     return rows.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : a.type < b.type ? -1 : 1);
   }
 
-  root.Calc = { nextMonthDay, nextRevenueDeadline, nextReportDeadline, upcomingEvents, REPORT_DEADLINES, isoDays, validISO, taipeiToday, priceOnOrBefore, dividendsFor, lotMetrics, totals, ageMinutes, liveChannels, parseLive, liveWindow,
+  /* ------------------------------------------------------------ the calendar page (all stocks)
+   * opts: { events: {ex}, conf: {items: {code: [{d, t, p, m}]}}, today, days, only: [codes] | null }.
+   * Rows { date, days, type: "除權息" | "法說會" | "財報", c (null for a rule row), kind, cash, stock, time, text, report }.
+   * Exchanges publish ex-dates and conferences per company; filing dates per company are not published
+   * in advance, so 財報 is the statutory deadline (one row), and a conference that announces results says so. */
+  function calendarRows(opts) {
+    const { events, conf, today } = opts, horizon = opts.days == null ? 14 : opts.days;
+    const only = opts.only ? new Set(opts.only) : null;
+    const within = (iso) => { const n = isoDays(today, iso); return n >= 0 && n <= horizon ? n : null; };
+    const rows = [];
+    for (const e of (events && events.ex) || []) {
+      const n = within(e.d); if (n === null || (only && !only.has(e.c))) continue;
+      rows.push({ date: e.d, days: n, type: "除權息", c: e.c, kind: e.k, cash: e.cash || null, stock: !!e.stock });
+    }
+    for (const [c, list] of Object.entries((conf && conf.items) || {})) {
+      if (only && !only.has(c)) continue;
+      for (const x of list) {
+        const n = within(x.d); if (n === null) continue;
+        rows.push({ date: x.d, days: n, type: "法說會", c, time: x.t || null, text: x.m || "", place: x.p || "",
+                    report: /財報|財務(報告|業務|資訊)|營運(成果|結果|績效)|季報|業績/.test(x.m || "") });
+      }
+    }
+    const rp = nextReportDeadline(today), pn = rp && within(rp.date);
+    if (rp && pn !== null) rows.push({ date: rp.date, days: pn, type: "財報", c: null, text: rp.label + "法定公告截止（一般公司；金融業另有規定）" });
+    const rv = nextRevenueDeadline(today), rn = within(rv);
+    if (rn !== null) rows.push({ date: rv, days: rn, type: "財報", c: null, text: "上月營收公告截止（每月 10 日前）" });
+    const order = { "財報": 0, "除權息": 1, "法說會": 2 };
+    return rows.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : order[a.type] - order[b.type] || ((a.c || "") < (b.c || "") ? -1 : 1));
+  }
+
+  root.Calc = { calendarRows, nextMonthDay, nextRevenueDeadline, nextReportDeadline, upcomingEvents, REPORT_DEADLINES, isoDays, validISO, taipeiToday, priceOnOrBefore, dividendsFor, lotMetrics, totals, ageMinutes, liveChannels, parseLive, liveWindow,
                 filterItems, sortItems, parseLots };
 })(typeof window !== "undefined" ? window : globalThis);

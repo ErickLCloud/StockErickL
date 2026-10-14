@@ -177,6 +177,12 @@ def mis_price(m):
     return None, False
 
 
+def mis_date(d):
+    """MIS trade date '20261014' -> '2026-10-14' (None if absent)."""
+    d = str(d or "")
+    return f"{d[:4]}-{d[4:6]}-{d[6:8]}" if len(d) == 8 and d.isdigit() else None
+
+
 def parse_mis(messages):
     """MIS msgArray -> {code: quote}. y is the previous close, v the
     cumulative volume in lots; the price comes from mis_price()."""
@@ -193,7 +199,7 @@ def parse_mis(messages):
         out[code] = {"last": last, "prev": prev, "chg": chg, "pct": pct,
                      "open": num(m.get("o")), "high": num(m.get("h")),
                      "low": num(m.get("l")), "vol": num(m.get("v"), 0),
-                     "time": m.get("t") or m.get("ot"), "est": est}
+                     "time": m.get("t") or m.get("ot"), "est": est, "date": mis_date(m.get("d"))}
     return out
 
 

@@ -240,6 +240,14 @@
   .chipline > span{flex:none; white-space:nowrap} svg.chipbars{width:auto; height:38px; flex:none; max-width:100%}
   .chipbars rect.up{fill:var(--up)} .chipbars rect.down{fill:var(--down)} .chipbars .axis{stroke:var(--line, #888); stroke-width:1; opacity:.5}
   .iprow{display:grid; grid-template-columns:auto 1fr auto; gap:8px; align-items:baseline; padding:5px 0 2px; font-size:13px}
+  .calday{margin:14px 0 4px; font-weight:600; font-size:13.5px; display:flex; gap:10px; align-items:baseline}
+  .calrow{display:grid; grid-template-columns:minmax(120px,190px) 64px 1fr; gap:8px; padding:6px 0; font-size:13px; border-bottom:1px solid rgba(128,128,128,.18); cursor:pointer; align-items:baseline}
+  .calrow:not([data-cal-open]){cursor:default}
+  .calrow .calc{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .caltype{font-size:12px; text-align:center; border-radius:999px; padding:1px 0; border:1px solid var(--line)}
+  .caltype.t-ex{color:#c0392b} .caltype.t-conf{color:#2f6fb3} .caltype.t-rep{color:var(--muted)}
+  .caltxt{min-width:0; overflow-wrap:anywhere}
+  @media (max-width:560px){ .calrow{grid-template-columns:1fr 60px} .calrow .caltxt{grid-column:1 / -1} }
   .hotrow{display:grid; grid-template-columns:1fr 62px 62px 76px; gap:6px; padding:5px 0; font-size:13px; cursor:pointer; border-bottom:1px solid rgba(128,128,128,.18)}
   .hotrow:hover{background:var(--hover)}
   .hotrow > span:not(:first-child){text-align:right}
@@ -257,6 +265,7 @@
       <button class="tab" id="tab-hold" aria-pressed="false"><svg viewBox="0 0 32 32" aria-hidden="true"><rect x="4" y="10" width="24" height="16" rx="3"/><path d="M11 10V7.5A2.5 2.5 0 0 1 13.5 5h5A2.5 2.5 0 0 1 21 7.5V10"/><path d="M4 17h24"/></svg><span>持倉</span></button>
       <button class="tab" id="tab-scan" aria-pressed="false"><svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="14" cy="14" r="8"/><path d="M20 20l7 7"/><path d="M10.5 15l2.5-2.5 2 2 3-3.5"/></svg><span>選股</span></button>
       <button class="tab" id="tab-sector" aria-pressed="false"><svg viewBox="0 0 32 32" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5"/><rect x="18" y="5" width="9" height="9" rx="1.5"/><rect x="5" y="18" width="9" height="9" rx="1.5"/><rect x="18" y="18" width="9" height="9" rx="1.5"/></svg><span>類股</span></button>
+      <button class="tab" id="tab-cal" aria-pressed="false"><svg viewBox="0 0 32 32" aria-hidden="true"><rect x="5" y="7" width="22" height="20" rx="2"/><path d="M5 13h22"/><path d="M11 4v6"/><path d="M21 4v6"/></svg><span>行事曆</span></button>
       <button class="tab" id="tab-ta" aria-pressed="false"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 26V6"/><path d="M4 26h24"/><path d="M8 20l5-6 4 3 7-9"/></svg><span>分析</span></button>
       <button class="tab" id="tab-bt" aria-pressed="false"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 16a9 9 0 1 0 3-6.7"/><path d="M6 5v6h6"/><path d="M16 11v5.5l3.5 2"/></svg><span>回測</span></button>
     </nav>
@@ -331,7 +340,8 @@ const store = {
 
 const S = {
   index:[], byCode:{}, events:null, globals:null, news:null, evDays:30, quotes:{}, quotesUpdated:null, ind:{}, fund:{}, meta:null, market:null,
-  sel:null, view:"home", home:{board:"TWSE", lead:"up", hot:"pct", mine:"watch", news:"tw"}, type:"all", pick:"all", sort:"code", range:250, hist:{},
+  sel:null, view:"home", home:{board:"TWSE", lead:"up", hot:"pct", mine:"watch", news:"tw"},
+  cal:{scope:null, days:14, types:{"除權息":true, "法說會":true, "財報":true}, board:"all", term:""}, type:"all", pick:"all", sort:"code", range:250, hist:{},
   watch:new Set(store.get(KEY_WATCH, [])), lots:store.get(KEY_LOTS, []),
   scan:{scope:"all", term:"", busy:false, out:null, list:null, watchOnly:false, sort:{k:"pre", dir:-1}},
   bt:{kind:"ma_cross", a:10, b:30, bars:250, stop:0, cost:true, out:null},
@@ -416,7 +426,7 @@ async function boot(){
   paintHeader(); paintNote(); render(); if(S.view === "home") setView("home");
   const want = p.get("code");
   if(want && S.byCode[want]) select(want, false);
-  if(p.get("view") === "holdings") setView("holdings");
+  if(p.get("view") === "holdings" || p.get("view") === "cal") setView(p.get("view"));      // ?view=cal: a bookmarkable calendar
   if(!store.ok) notifyStorage();
 }
 
@@ -518,8 +528,15 @@ function render(){
 }
 
 /* -------------------------------------------------------------- detail */
+/* chips / conferences / earnings / dividends: ~1.5 MB together, so only fetched when a stock or the calendar is first opened */
+let extrasP = null;
+function loadExtras(){
+  if(S.chips !== undefined) return Promise.resolve();
+  return extrasP = extrasP || Promise.all(["chips", "conferences", "earnings", "dividends"].map((n) => getJSON("data/" + n + ".json").catch(() => null)))
+    .then(([ch, cf, er, dv]) => { S.chips = ch; S.conf = cf; S.earn = er; S.divs = dv; });
+}
 async function select(code, scroll){
-  S.sel = code; if(S.view === "holdings" || S.view === "scan" || S.view === "home") S.view = "market"; syncTabs();
+  S.sel = code; if(S.view === "holdings" || S.view === "scan" || S.view === "home" || S.view === "cal") S.view = "market"; syncTabs();
   try{ const u = new URL(location.href); u.searchParams.set("code", code); history.replaceState(null, "", u); }catch(e){}
   render(); paintCurrent();
   if(scroll !== false && window.innerWidth < 860) $("detail").scrollIntoView({behavior:"smooth", block:"start"});
@@ -527,10 +544,7 @@ async function select(code, scroll){
     try{ S.hist[code] = await getJSON("data/history/" + encodeURIComponent(code) + ".json"); }
     catch(e){ S.hist[code] = null; }
   }
-  if(S.chips === undefined){            // ~1 MB, so only fetched when a stock is first opened
-    const [ch, cf, er, dv] = await Promise.all(["chips", "conferences", "earnings", "dividends"].map((n) => getJSON("data/" + n + ".json").catch(() => null)));
-    S.chips = ch; S.conf = cf; S.earn = er; S.divs = dv;
-  }
+  await loadExtras();
   if(S.sel === code) paintCurrent();
 }
 
@@ -1049,12 +1063,13 @@ const CH = {tf:"D", view:null, cursor:null, pinned:false, data:null, code:null, 
 const CH_L = 58, CH_R = 66;
 
 function chData(code, tf){
-  const c = A.clean(S.hist[code], (S.ind[code] || {}).gap);
-  const key = code + "|" + tf + "|" + (c.o ? "o" : "-") + "|" + c.p.length + "|" + c.d[c.d.length - 1];
+  const c = A.withQuote(A.clean(S.hist[code], (S.ind[code] || {}).gap), S.quotes[code]);
+  // today's bar moves with the live quote without changing the length or the last date
+  const key = code + "|" + tf + "|" + (c.o ? "o" : "-") + "|" + c.p.length + "|" + c.d[c.d.length - 1] + "|" + c.p[c.p.length - 1] + "|" + (c.v ? c.v[c.v.length - 1] : "");
   if(CH.data && CH.data.key === key) return CH.data;
   const b = A.bars(c);
   const bs = tf === "W" ? A.weeklyBars(b.bars) : b.bars;
-  CH.data = {key, bs, real: b.real, hasVol: bs.some((x) => x.v != null), ser: A.series(bs.map((x) => x.c))};
+  CH.data = {key, bs, real: b.real, hasVol: bs.some((x) => x.v != null), ser: A.series(bs.map((x) => x.c)), today: !!c.today};
   return CH.data;
 }
 const chDefaultCount = () => CH.tf === "D" ? 150 : 80;
@@ -1078,6 +1093,7 @@ function paintDock(an, below){
     '<button class="act" data-ch-reset="1">還原</button>' +
     '<span class="flat chhint">滾輪縮放 · 拖曳平移 · 點一下固定該日（再點取消）· 雙擊還原 · 鍵盤 ← → + −</span></div>' +
     (d.real ? "" : '<div class="alert">這檔的歷史資料還沒有開高低量（要等下一次完整建置），先以收盤折線顯示。</div>') +
+    (d.today ? '<div class="sub" id="ch-today">最後一根是今日盤中（報價 ' + esc((S.quotes[code] || {}).time || "") + '），晚上完整建置後換成正式資料。</div>' : "") +
     '<div id="ch-info" aria-live="polite"></div>' +
     '<div id="ch-wrap" tabindex="0" aria-label="K 線圖，可用方向鍵逐日查看"></div>' +
     '<div class="note">紅漲綠跌。MA5 橘、MA20 紫、MA60 青；虛線為壓力（紅）／支撐（綠）與趨勢通道。' +
@@ -1295,7 +1311,7 @@ function paintTA(){
     (it ? '<span class="tag">' + esc(it.c) + ' ' + esc(it.n || "") + '</span>' : "") + '</div>' + codeBar() + '<div class="msg err" id="v-msg"></div>';
   const bad = needHist();
   if(bad){ $("detail").innerHTML = head + bad + '</div>'; $("chartdock").hidden = true; return; }
-  const c = A.clean(S.hist[code], (S.ind[code] || {}).gap), an = A.analyze(c), n = c.p.length;
+  const c = A.withQuote(A.clean(S.hist[code], (S.ind[code] || {}).gap), S.quotes[code]), an = A.analyze(c), n = c.p.length;
   const q = S.quotes[code] || {};
 
   const tr = an.trend;
@@ -1488,6 +1504,72 @@ function homeStocks(board){
     if(q && q.pct != null && q.last > 0) out.push({it, q});
   }
   return out;
+}
+
+/* ---- 行事曆: 除權息 (data/events.json), 法說會 (data/conferences.json) and the filing deadlines (Calc.calendarRows).
+ * Defaults to my holdings + watchlist when there are any; the whole market is one click away and can be
+ * narrowed by type, board and a search, since a busy fortnight has hundreds of rows. */
+const CAL_MAX = 300;
+function paintCal(){
+  const k = S.cal, head = '<div class="pad"><div class="head"><span class="sym">行事曆</span><span class="tag">除權息・法說會・財報</span></div>';
+  if(S.conf === undefined){
+    $("detail").innerHTML = head + '<div class="empty">載入法說會資料…</div></div>';
+    loadExtras().then(() => { if(S.view === "cal") paintCal(); });
+    return;
+  }
+  const mine = ownCodes(), scope = k.scope || (mine.length ? "mine" : "all");
+  const chip = (attr, val, label, on) => '<button class="chip" ' + attr + '="' + esc(val) + '" aria-pressed="' + on + '">' + label + '</button>';
+  $("detail").innerHTML = head +
+    '<div class="chbar">' + chip("data-cal-scope", "mine", "我的持股＋自選（" + mine.length + "）", scope === "mine") + chip("data-cal-scope", "all", "全部", scope === "all") + '<span class="sep"></span>' +
+      [[7, "7 天"], [14, "14 天"], [30, "30 天"]].map(([v, l]) => chip("data-cal-days", v, l, k.days === v)).join("") + '</div>' +
+    '<div class="chbar">' + Object.keys(k.types).map((t) => chip("data-cal-type", t, t, k.types[t])).join("") + '<span class="sep"></span>' +
+      [["all", "上市＋上櫃"], ["TWSE", "上市"], ["TPEX", "上櫃"]].map(([v, l]) => chip("data-cal-board", v, l, k.board === v)).join("") + '</div>' +
+    '<input id="cal-term" type="search" placeholder="搜尋代號或名稱" value="' + esc(k.term) + '" style="margin-top:8px;max-width:260px">' +
+    (!S.events ? '<div class="alert">除權息資料還沒載入（要等網站下一次更新）。</div>' :
+      S.events.errors && S.events.errors.length ? '<div class="alert">有 ' + S.events.errors.length + ' 個資料來源這次沒抓到（' + esc(S.events.errors.join("、")) + '），可能不完整。</div>' : "") +
+    (!S.conf ? '<div class="alert">法說會資料沒載入，這次只顯示除權息與財報期限。</div>' : "") +
+    '<div id="cal-list"></div>' +
+    '<div class="note">除權息：證交所／櫃買的預告表，殖利率＝該次現金股利÷現價（單次，不是年化）。法說會：公開資訊觀測站，內容提到財報或營運成果的標「公布財報」。' +
+    '個別公司的財報公布日事前沒有公開資料，所以「財報」只列法定截止日（季報 5/15、8/14、11/14，年報 3/31，月營收每月 10 日）。點一列可打開該股。</div></div>';
+  paintCalList();
+}
+function paintCalList(){
+  const k = S.cal, mine = ownCodes(), scope = k.scope || (mine.length ? "mine" : "all"), box = $("cal-list");
+  if(!box) return;
+  if(scope === "mine" && !mine.length){ box.innerHTML = '<div class="empty">還沒有持股或自選股；切到「全部」看整個市場。</div>'; return; }
+  const term = k.term.trim().toLowerCase();
+  const all = C.calendarRows({events: S.events, conf: S.conf, today: C.taipeiToday(), days: k.days, only: scope === "mine" ? mine : null})
+    .filter((r) => r.c === null ? !term :
+      (k.board === "all" || (S.byCode[r.c] || {}).b === k.board) &&
+      (!term || r.c.toLowerCase().includes(term) || ((S.byCode[r.c] || {}).n || "").toLowerCase().includes(term)));
+  const cnt = {}; for(const r of all) cnt[r.type] = (cnt[r.type] || 0) + 1;
+  const rows = all.filter((r) => k.types[r.type]);
+  const WD = "日一二三四五六";
+  let html = '<div class="count">' + rows.length + ' 筆（' + Object.keys(k.types).map((t) => t + " " + (cnt[t] || 0)).join("、") + '）' +
+    (rows.length > CAL_MAX ? '，只列前 ' + CAL_MAX + ' 筆，請縮小範圍' : "") + '</div>', last = null;
+  for(const r of rows.slice(0, CAL_MAX)){
+    if(r.date !== last){
+      last = r.date;
+      html += '<div class="calday">' + r.date.slice(5).replace("-", "/") + '（' + WD[new Date(r.date + "T00:00:00Z").getUTCDay()] + '）' +
+        '<span class="flat">' + (r.days === 0 ? "今天" : r.days + " 天後") + '</span></div>';
+    }
+    const it = r.c ? S.byCode[r.c] || {} : null, q = r.c ? S.quotes[r.c] || {} : {};
+    let txt;
+    if(r.type === "除權息"){
+      const bits = [r.kind];
+      if(r.cash) bits.push("現金 " + r.cash + " 元" + (q.last > 0 ? "，殖利率約 " + (r.cash / q.last * 100).toFixed(2) + "%" : ""));
+      if(r.stock) bits.push("另有配股");
+      txt = esc(bits.join("，"));
+    }else if(r.type === "法說會"){
+      txt = (r.report ? '<span class="tag">公布財報</span> ' : "") + esc((r.time || "") + " " + r.text.slice(0, 90) + (r.text.length > 90 ? "…" : ""));
+    }else txt = esc(r.text);
+    html += '<div class="calrow"' + (r.c ? ' data-cal-open="' + esc(r.c) + '" title="' + esc(r.text || "") + '"' : "") + '>' +
+      '<span class="calc">' + (r.c ? '<b>' + esc(r.c) + '</b> ' + esc(it.n || "") : "全體") + '</span>' +
+      '<span class="caltype t-' + (r.type === "除權息" ? "ex" : r.type === "法說會" ? "conf" : "rep") + '">' + r.type + '</span>' +
+      '<span class="caltxt">' + txt + '</span></div>';
+  }
+  if(!rows.length) html += '<div class="empty">這段期間沒有符合的事件。</div>';
+  box.innerHTML = html;
 }
 
 function paintHome(){
@@ -1844,9 +1926,9 @@ function importLots(file){
 }
 
 /* -------------------------------------------------------------- views */
-const TABS = {home:"tab-home", market:"tab-market", holdings:"tab-hold", scan:"tab-scan", sector:"tab-sector", ta:"tab-ta", bt:"tab-bt"};
+const TABS = {home:"tab-home", market:"tab-market", holdings:"tab-hold", scan:"tab-scan", sector:"tab-sector", cal:"tab-cal", ta:"tab-ta", bt:"tab-bt"};
 function syncTabs(){
-  $("cols").classList.toggle("wide", S.view === "scan" || S.view === "sector" || S.view === "home");
+  $("cols").classList.toggle("wide", S.view === "scan" || S.view === "sector" || S.view === "home" || S.view === "cal");
   if(S.view !== "ta") $("chartdock").hidden = true;
   for(const [v, id] of Object.entries(TABS)) $(id).setAttribute("aria-pressed", String(S.view === v));
 }
@@ -1861,6 +1943,7 @@ function paintCurrent(){
   if(S.view === "home") return paintHome();
   if(S.view === "scan") return paintScan();
   if(S.view === "sector") return paintSector();
+  if(S.view === "cal") return paintCal();
   if(S.view === "ta" || S.view === "bt"){
     if(S.sel && S.hist[S.sel] === undefined) loadHist(S.sel).then(() => { if(S.view === "ta" || S.view === "bt") paintCurrent(); });
     return S.view === "ta" ? paintTA() : paintBT();
@@ -1904,6 +1987,12 @@ $("detail").addEventListener("click", (e) => {
   if(st){ S.sec.stat = st.dataset.secStat; paintSector(); return; }
   if(ss){ const k = ss.dataset.secSort, kk = k === "name" || k === "n" ? k : +k; S.sec.dir = S.sec.sort === kk ? -S.sec.dir : (kk === "name" ? 1 : -1); S.sec.sort = kk; paintSector(); return; }
   if(so2 && !t.closest("[data-go]")){ S.sec.open = S.sec.open === so2.dataset.secOpen ? null : so2.dataset.secOpen; paintSector(); return; }
+  const cs = t.closest("[data-cal-scope]"), cd = t.closest("[data-cal-days]"), ct = t.closest("[data-cal-type]"), cb = t.closest("[data-cal-board]"), co = t.closest("[data-cal-open]");
+  if(cs){ S.cal.scope = cs.dataset.calScope; paintCal(); return; }
+  if(cd){ S.cal.days = +cd.dataset.calDays; paintCal(); return; }
+  if(ct){ S.cal.types[ct.dataset.calType] = !S.cal.types[ct.dataset.calType]; paintCal(); return; }
+  if(cb){ S.cal.board = cb.dataset.calBoard; paintCal(); return; }
+  if(co){ select(co.dataset.calOpen); return; }
   const evd = t.closest("[data-ev-days]");
   if(evd){ S.evDays = +evd.dataset.evDays; refreshLotArea(); return; }
   if(t.closest("#scan-run")){ runScan(); return; }
@@ -1955,6 +2044,7 @@ $("detail").addEventListener("keydown", (e) => {
 });
 $("detail").addEventListener("input", (e) => {
   if(e.target.id === "scan-term"){ readScanFilters(); paintScanTable(); }
+  if(e.target.id === "cal-term"){ S.cal.term = e.target.value; paintCalList(); }
   if(e.target.id === "f-cost") S.costDirty = e.target.value !== "";   /* typing takes control; emptying hands it back */
   else if(e.target.id === "f-code") autofillCost();
 });
@@ -1963,6 +2053,7 @@ $("tab-market").addEventListener("click", () => setView("market"));
 $("tab-hold").addEventListener("click", () => setView("holdings"));
 $("tab-scan").addEventListener("click", () => setView("scan"));
 $("tab-sector").addEventListener("click", () => setView("sector"));
+$("tab-cal").addEventListener("click", () => setView("cal"));
 $("tab-ta").addEventListener("click", () => setView("ta"));
 $("tab-bt").addEventListener("click", () => setView("bt"));
 
@@ -2014,6 +2105,7 @@ async function pollLive(){
     S.liveAt = Date.now();
     applyLive(); paintHeader();
     if(S.view === "holdings") refreshLotArea(); else if(S.view === "home") paintHome(); else if(S.view === "market"){ render(); if(S.sel) paintDetail(S.sel); }
+    else if(S.view === "ta" && S.sel && S.liveCodes[S.sel] && S.hist[S.sel]) paintTA();      // today's bar follows the live price
   }catch(e){ S.liveAt = null; }     /* fall back silently to the snapshot */
 }
 
