@@ -82,6 +82,38 @@ async function load(url) {
     const pe = fund.items["2330"][0];
     t("shows its P/E from fundamental.json", $("detail").textContent.includes(n2(pe)), "pe=" + pe);
     t("labelled as 個股 on 上市", $("detail").textContent.includes("個股") && $("detail").textContent.includes("上市"));
+    /* 籌碼: same numbers as data/chips.json (only checked when the file exists locally) */
+    const chips = await fetch("../../docs/data/chips.json", nc).then((r) => r.ok ? r.json() : null).catch(() => null);
+    if (chips && chips.items["2330"]) {
+      await until(() => $("detail").textContent.includes("外資 近 5 日"));
+      const f = chips.items["2330"].f.filter((v) => v != null), f5 = f.slice(-5).reduce((a, b) => a + b, 0);
+      const txt = $("detail").textContent;
+      t("籌碼: 外資 近 5 日 matches chips.json", txt.includes("外資 近 5 日" + (f5 > 0 ? "+" : "") + f5.toLocaleString() + " 張"), "f5=" + f5);
+      t("籌碼: one bar per day with data", $("detail").querySelectorAll(".chipbars rect").length === chips.items["2330"].f.filter((v) => v).length);
+      t("籌碼: 集保 block when a TDCC week exists", !chips.weeks.length || txt.includes("大戶（400 張以上）持股"));
+      t("籌碼: the overlap caveat is shown", txt.includes("大戶和外資有重疊"));
+    } else t("籌碼: no chips.json, detail still renders", !$("detail").textContent.includes("籌碼：載入中"));
+    const earn = await fetch("../../docs/data/earnings.json", nc).then((r) => r.ok ? r.json() : null).catch(() => null);
+    if (earn && earn.items["2330"]) {
+      const tb = [...$("detail").querySelectorAll("table.earn")][0], e = earn.items["2330"];
+      t("獲利: one column per quarter", tb && tb.querySelectorAll("thead th").length === earn.q.length + 1);
+      const epsCells = tb ? [...tb.querySelectorAll("tbody tr:last-child td")].slice(1).map((x) => x.textContent) : [];
+      t("獲利: EPS row matches earnings.json", epsCells.join() === e.eps.map((v) => v == null ? "—" : v.toFixed(2)).join(), epsCells.join());
+    }
+    const divs = await fetch("../../docs/data/dividends.json", nc).then((r) => r.ok ? r.json() : null).catch(() => null);
+    if (divs && divs.items["2330"]) {
+      const txt = $("detail").textContent, ev = divs.items["2330"];
+      const yr = ev[ev.length - 1][0].slice(0, 4), sumY = ev.filter((x) => x[0].startsWith(yr) && x[1] != null).reduce((a, x) => a + x[1], 0);
+      t("股利: the latest year's cash total matches dividends.json", txt.includes(yr) && [...$("detail").querySelectorAll("table.earn td")].some((td) => td.textContent === sumY.toFixed(2)), yr + " " + sumY.toFixed(2));
+      t("股利: yield is labelled as trailing, not a forecast", txt.includes("不是預估值"));
+    }
+    const conf = await fetch("../../docs/data/conferences.json", nc).then((r) => r.ok ? r.json() : null).catch(() => null);
+    if (conf && conf.items["2330"]) {
+      const rowsC = $("detail").querySelectorAll(".confrow");
+      t("法說會: one row per conference in conferences.json", rowsC.length === conf.items["2330"].length, rowsC.length + " rows");
+      const files = conf.items["2330"].flatMap((x) => [x.zh, x.en]).filter(Boolean);
+      t("法說會: every slide is a safe link to MOPS", $("detail").querySelectorAll('.confrow a[href^="https://mopsov.twse.com.tw/"][rel~="noopener"]').length === files.length, files.length + " files");
+    }
 
     type($("q"), "6488");
     rows()[0].click();

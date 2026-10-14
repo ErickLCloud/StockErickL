@@ -234,6 +234,11 @@
   .dist .b{display:block; width:100%; border-radius:2px 2px 0 0; min-height:2px}
   .ratio{display:flex; height:10px; border-radius:5px; overflow:hidden; margin-top:10px}
   .gmrow{display:grid; grid-template-columns:auto 1fr auto auto; gap:8px; align-items:baseline; padding:5px 0 2px; font-size:13px}
+  table.earn{font-size:12.5px; margin:4px 0} table.earn td, table.earn th{padding:3px 6px; text-align:right; white-space:nowrap} table.earn td.l, table.earn th.l{text-align:left; white-space:normal}
+  .confrow{font-size:13px; padding:5px 0; border-bottom:1px solid rgba(128,128,128,.18)} .confrow > div{margin-top:2px; overflow-wrap:anywhere}
+  .chipline{display:flex; align-items:center; gap:8px; font-size:12px; margin:4px 0 2px}
+  .chipline > span{flex:none; white-space:nowrap} svg.chipbars{width:auto; height:38px; flex:none; max-width:100%}
+  .chipbars rect.up{fill:var(--up)} .chipbars rect.down{fill:var(--down)} .chipbars .axis{stroke:var(--line, #888); stroke-width:1; opacity:.5}
   .iprow{display:grid; grid-template-columns:auto 1fr auto; gap:8px; align-items:baseline; padding:5px 0 2px; font-size:13px}
   .hotrow{display:grid; grid-template-columns:1fr 62px 62px 76px; gap:6px; padding:5px 0; font-size:13px; cursor:pointer; border-bottom:1px solid rgba(128,128,128,.18)}
   .hotrow:hover{background:var(--hover)}
@@ -522,7 +527,125 @@ async function select(code, scroll){
     try{ S.hist[code] = await getJSON("data/history/" + encodeURIComponent(code) + ".json"); }
     catch(e){ S.hist[code] = null; }
   }
+  if(S.chips === undefined){            // ~1 MB, so only fetched when a stock is first opened
+    const [ch, cf, er, dv] = await Promise.all(["chips", "conferences", "earnings", "dividends"].map((n) => getJSON("data/" + n + ".json").catch(() => null)));
+    S.chips = ch; S.conf = cf; S.earn = er; S.divs = dv;
+  }
   if(S.sel === code) paintCurrent();
+}
+
+/* 獲利趨勢 (data/earnings.json, scripts/earnings.py): single quarters from MOPS 綜合損益表彙總. */
+function earnHtml(code){
+  const E = S.earn;
+  if(E === undefined) return "";
+  const it = E && E.items && E.items[code];
+  if(!it) return E ? '<div class="sub">獲利趨勢：這檔沒有季報資料。</div>' : "";
+  const q = E.q || [], last = (S.quotes[code] || {}).last;
+  const eps4 = it.eps.slice(-4), ttm = eps4.length === 4 && eps4.every((v) => v != null) ? eps4.reduce((a, b) => a + b, 0) : null;
+  const f = (v, d) => v == null ? "—" : Number(v).toFixed(d);
+  const row = (label, arr, d, colour) => '<tr><td class="l">' + label + '</td>' + arr.map((v) => '<td' + (colour ? ' class="' + cls(v) + '"' : "") + '>' + f(v, d) + '</td>').join("") + '</tr>';
+  return '<div class="sub">獲利趨勢（單季，公開資訊觀測站綜合損益表）</div>' +
+    '<div class="scroll"><table class="earn"><thead><tr><th class="l"></th>' + q.map((x) => '<th>' + esc(x) + '</th>').join("") + '</tr></thead><tbody>' +
+    row("營收（億）", it.rev, 1) + row("毛利率 %", it.gm, 1) + row("營益率 %", it.om, 1) + row("淨利率 %", it.nm, 1) + row("EPS（元）", it.eps, 2, true) +
+    '</tbody></table></div>' +
+    '<div class="note">近四季 EPS 合計 ' + (ttm == null ? "—" : ttm.toFixed(2) + " 元") +
+    (ttm > 0 && last ? '，以現價計本益比 ' + (last / ttm).toFixed(1) + ' 倍' : "") +
+    '。單季數字由年初至今累計數相減而來；金融業沒有營收、毛利欄位。最新一季在多數公司公布前不列入。</div>';
+}
+
+/* 股利 (data/dividends.json, scripts/dividends.py): ex-dividend results, 5 years. Cash only in
+ * the sums and the yield; TWSE "除權" events (stock dividend OR a rights issue) are listed apart. */
+function divHtml(code){
+  const D = S.divs;
+  if(D === undefined) return "";
+  const ev = (D && D.items && D.items[code]) || [];
+  if(!ev.length) return D ? '<div class="sub">股利：' + esc((D.from || "").slice(0, 4)) + ' 年以來沒有除權息紀錄。</div>' : "";
+  const last = (S.quotes[code] || {}).last;
+  const today = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);
+  const yearAgo = (Number(today.slice(0, 4)) - 1) + today.slice(4);
+  const ttmCash = ev.filter((e) => e[0] > yearAgo && e[1] != null).reduce((a, e) => a + e[1], 0);
+  const years = {};
+  for(const [d, cash, stock, total] of ev){
+    const y = years[d.slice(0, 4)] = years[d.slice(0, 4)] || {cash: 0, n: 0, other: []};
+    if(cash != null){ y.cash += cash; y.n++; }
+    if(stock) y.other.push("配股 " + (stock / 100).toFixed(2) + " 元（每千股配 " + stock + " 股，面額 10 元計）");
+    if(cash == null && !stock) y.other.push(esc(d.slice(5)) + " 除權（配股或現增，參考價差 " + Number(total).toFixed(2) + " 元）");
+  }
+  const rows = Object.keys(years).sort().reverse().map((y) => '<tr><td class="l">' + y + '</td><td>' + (years[y].n ? years[y].cash.toFixed(2) : "—") + '</td><td>' + (years[y].n || "—") +
+    '</td><td class="l">' + years[y].other.join("；") + '</td></tr>').join("");
+  return '<div class="sub">股利（依除權息日，' + esc((D.from || "").slice(0, 4)) + ' 年起）</div>' +
+    '<div class="grid"><div class="cell"><div class="k">近 12 個月現金股利</div><div class="v">' + (ttmCash ? ttmCash.toFixed(2) + " 元" : "—") + '</div></div>' +
+    '<div class="cell"><div class="k">以現價計殖利率</div><div class="v">' + (ttmCash && last ? (ttmCash / last * 100).toFixed(2) + "%" : "—") + '</div></div>' +
+    '<div class="cell"><div class="k">最近一次除權息</div><div class="v">' + esc(ev[ev.length - 1][0]) + '</div></div></div>' +
+    '<div class="scroll"><table class="earn"><thead><tr><th class="l">年度</th><th>現金股利（元）</th><th>次數</th><th class="l">其他</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+    '<div class="note">金額為每股、依除權息日歸年（季配息的公司一年會有四次）。殖利率用近 12 個月實際發放的現金股利除以現價，不是預估值。上市公司「除權」無法區分配股或現金增資，只列出、不計入。</div>';
+}
+
+/* 法說會 (data/conferences.json, scripts/conferences.py, from MOPS; rebuilt each morning).
+ * Upcoming first, then the latest past ones with their slides (PDF straight from MOPS). */
+function confHtml(code){
+  const F = S.conf;
+  if(F === undefined) return "";
+  const list = (F && F.items && F.items[code]) || [];
+  const months = (F && F.months) || [];
+  const span = months.length ? esc(months[0]) + " 到 " + esc(months[months.length - 1]) : "";
+  if(!list.length) return F ? '<div class="sub">法說會：' + span + ' 期間沒有登記的法說會。</div>' : "";
+  const today = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);
+  const slide = (f, label) => f ? '<a href="' + esc(F.slide + encodeURIComponent(f)) + '" target="_blank" rel="noopener">' + label + '</a>' : "";
+  const rows = list.map((x) => {              // newest first, as stored
+    const up = x.d >= today, links = [slide(x.zh, "中文簡報"), slide(x.en, "英文簡報")].filter(Boolean).join("　");
+    return '<div class="confrow' + (up ? " next" : "") + '"><b>' + esc(x.d) + ' ' + esc(x.t) + (up ? ' <span class="tag">即將舉行</span>' : "") + '</b>' +
+      '<div>' + esc(x.m) + '</div><div class="flat">' + esc(x.p) + (links ? '　' + links : "") + '</div></div>';
+  }).join("");
+  return '<div class="sub">法說會（公開資訊觀測站，' + span + '）</div>' + rows +
+    '<div class="note">簡報檔由公開資訊觀測站提供，公司通常在會後才上傳。摘要是公司自己填寫的文字。</div>';
+}
+
+/* 籌碼 (data/chips.json, scripts/chips.py; rebuilt each morning). Daily columns f/t/d/m/s =
+ * 外資/投信/自營商 net (張), 融資/融券 balance (張); weekly b/k/n/p = 大戶(400張+)%, 千張%, 散戶(<50張) 人數, 散戶%. */
+function chipsHtml(code){
+  const C = S.chips;
+  if(C === undefined) return '<div class="sub">籌碼：載入中…</div>';
+  const it = C && C.items && C.items[code];
+  if(!it) return C ? '<div class="sub">籌碼：這檔沒有三大法人／融資資料。</div>' : "";
+  const cell = (k, v, c) => '<div class="cell"><div class="k">' + k + '</div><div class="v' + (c ? " " + c : "") + '">' + v + '</div></div>';
+  const vals = (a) => a.filter((v) => v != null);
+  const sum = (a, n) => { const v = vals(a.slice(-n)); return v.length ? v.reduce((x, y) => x + y, 0) : null; };
+  const lot = (v) => v == null ? "—" : (v > 0 ? "+" : "") + v.toLocaleString() + " 張";
+  const streak = (a) => {
+    let n = 0, s = 0;
+    for(let i = a.length - 1; i >= 0 && a[i] != null && a[i] !== 0; i--){
+      const g = Math.sign(a[i]); if(s && g !== s) break; s = g; n++;
+    }
+    return n ? (s > 0 ? "連買 " : "連賣 ") + n + " 日" : "—";
+  };
+  const last = (a) => { const v = vals(a); return v.length ? v[v.length - 1] : null; };
+  const f5 = sum(it.f, 5), f20 = sum(it.f, 20), t5 = sum(it.t, 5), t20 = sum(it.t, 20), d5 = sum(it.d, 5);
+  const m = vals(it.m), mChg = m.length > 1 && m[0] ? (m[m.length - 1] - m[0]) / m[0] * 100 : null;
+  // 外資 bars, last N days; height scaled to the largest absolute day
+  const fs = it.f, mx = Math.max(1, ...vals(fs).map(Math.abs)), W = 6, H = 36;
+  const bars = '<svg class="chipbars" width="' + fs.length * W + '" height="' + (H + 2) + '" role="img" aria-label="外資近 ' + fs.length + ' 日買賣超">' +
+    fs.map((v, i) => { if(v == null || v === 0) return ""; const h = Math.max(1, Math.abs(v) / mx * H / 2);
+      return '<rect x="' + (i * W) + '" y="' + (v > 0 ? H / 2 + 1 - h : H / 2 + 1) + '" width="' + (W - 1) + '" height="' + h + '" class="' + (v > 0 ? "up" : "down") + '"/>'; }).join("") +
+    '<line x1="0" x2="' + fs.length * W + '" y1="' + (H / 2 + 1) + '" y2="' + (H / 2 + 1) + '" class="axis"/></svg>';
+  const days = C.days || [], weeks = C.weeks || [];
+  let html = '<div class="sub">籌碼（三大法人、融資融券至 ' + esc(days[days.length - 1] || "—") + '，近 ' + days.length + ' 個交易日）</div>' +
+    '<div class="grid">' + cell("外資 最新一日", lot(last(it.f)), cls(last(it.f))) + cell("外資 近 5 日", lot(f5), cls(f5)) + cell("外資 近 20 日", lot(f20), cls(f20)) +
+    cell("外資 連續", streak(it.f)) + cell("投信 近 5 日", lot(t5), cls(t5)) + cell("投信 近 20 日", lot(t20), cls(t20)) +
+    cell("自營商 近 5 日", lot(d5), cls(d5)) + cell("融資餘額", m.length ? m[m.length - 1].toLocaleString() + " 張" : "—") +
+    cell("融資 " + m.length + " 日變化", mChg == null ? "—" : sign(mChg) + "%", cls(mChg)) + '</div>' +
+    '<div class="chipline"><span class="flat">外資每日買賣超</span> ' + bars + '</div>';
+  const b = vals(it.b), n = vals(it.n), k = vals(it.k);
+  if(b.length){
+    const dB = b.length > 1 ? b[b.length - 1] - b[b.length - 2] : null, dN = n.length > 1 ? n[n.length - 1] - n[n.length - 2] : null;
+    html += '<div class="sub">集保股權分散（' + esc(weeks[weeks.length - 1] || "") + ' 那週）</div><div class="grid">' +
+      cell("大戶（400 張以上）持股", n2(b[b.length - 1]) + "%") + cell("大戶 週變化", dB == null ? "下週起" : sign(dB) + " 個百分點", cls(dB)) +
+      cell("千張大戶持股", k.length ? n2(k[k.length - 1]) + "%" : "—") +
+      cell("散戶（未滿 50 張）人數", n.length ? n[n.length - 1].toLocaleString() : "—") +
+      cell("散戶人數 週變化", dN == null ? "下週起" : (dN > 0 ? "+" : "") + dN.toLocaleString()) + '</div>';
+  }
+  return html + '<div class="note">「大戶／散戶」依集保持股張數分級，是<strong>持股分布</strong>不是買賣紀錄；千張以上的帳戶也包含外資保管帳戶、ETF 與公司派，所以大戶和外資有重疊。' +
+    '大戶持股比上升、散戶人數下降，一般解讀為籌碼集中，但這只是常見的看法，本工具還沒有驗證它對股價的預測力。集保每週公布一次，歷史從 2026-10 開始累積。</div>';
 }
 
 /* 財報 (data/financials.json, rebuilt daily): [月營收(千元), 月增%, 年增%, 累計年增%, EPS(年初至今), 毛利率%] */
@@ -547,7 +670,7 @@ function paintDetail(code){
   let fundHtml = "";
   if(it.k === "ETF") fundHtml = '<div class="sub">ETF 沒有本益比等基本面資料（TWSE 未提供）。</div>';
   else fundHtml = '<div class="grid">' + cell("本益比", f ? n2(f[0]) : "—") +
-        cell("殖利率 %", f ? n2(f[1]) : "—") + cell("股價淨值比", f ? n2(f[2]) : "—") + '</div>' + finHtml(code);
+        cell("殖利率 %", f ? n2(f[1]) : "—") + cell("股價淨值比", f ? n2(f[2]) : "—") + '</div>' + finHtml(code) + earnHtml(code) + divHtml(code) + confHtml(code) + chipsHtml(code);
 
   const gap = d.gap ? '<div class="alert">⚠ 價格序列在 <strong>' + esc(d.gap.date) + '</strong> 出現異常跳空（前後收盤比約 ' +
     esc(d.gap.ratio) + ' 倍）：可能是分割、反分割、減資，也可能是資料錯誤，無法由資料判斷。' +

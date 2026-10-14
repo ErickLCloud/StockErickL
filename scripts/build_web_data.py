@@ -711,9 +711,46 @@ def build_history(out):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("mode", choices=("quotes", "history", "financials", "all"))
+    ap.add_argument("mode", choices=("quotes", "history", "financials", "chips", "conferences", "earnings", "dividends", "all"))
     ap.add_argument("--out", default=str(DEFAULT_OUT))
     args = ap.parse_args(argv)
+    if args.mode == "earnings":
+        # Quarterly YTD income statements from MOPS; quarter snapshots in <out>/earnings/
+        # (restored from the data branch). First run fetches 9 quarters x 2 markets.
+        from scripts import earnings
+        done = earnings.update(Path(args.out) / "earnings", datetime.now(TAIPEI).date())
+        doc = earnings.build_earnings(Path(args.out) / "earnings", args.out, stamp=stamp())
+        print("earnings: fetched", done, "->", len(doc["items"]), "codes,", doc["q"])
+        return 0
+    if args.mode == "dividends":
+        from scripts.dividends import build_dividends
+        doc = build_dividends(args.out, today=datetime.now(TAIPEI).date(), stamp=stamp())
+        print("dividends:", len(doc["items"]), "codes since", doc["from"], "errors:", doc["errors"])
+        return 0
+    if args.mode == "conferences":
+        # 法說會 from MOPS (no open-data feed): 2 months back to 1 ahead, both markets, ~1 minute.
+        from scripts.conferences import build_conferences
+        doc = build_conferences(args.out, today=datetime.now(TAIPEI).date(), stamp=stamp())
+        print("conferences:", len(doc["items"]), "codes,", doc["months"], "errors:", doc["errors"])
+        return 0
+    if args.mode == "chips":
+        # Morning job: the previous day's institutional and margin data are complete by then.
+        # Trading days come from the history build (2330's dates); the first run back-fills 60
+        # of them (~15 minutes, TWSE rate-limits bursts), later runs fetch one or two.
+        from scripts import chips
+        from src.http import fetch_bytes
+        hist = Path(args.out) / "history" / "2330.json"
+        if not hist.exists():
+            print("chips: no history/2330.json to take trading days from; run history first")
+            return 1
+        days = json.loads(hist.read_text(encoding="utf-8"))["d"][-60:]
+        store = Path(args.out) / "chips"
+        done = chips.update_daily(store, days, fetch_json)
+        week = chips.update_tdcc(store, lambda u: fetch_bytes(u).decode("utf-8-sig"))
+        doc = chips.build_chips(store, args.out, stamp=stamp())
+        print("chips:", len(done), "days fetched, TDCC week", week, "->", len(doc["items"]), "codes,",
+              len(doc["days"]), "days,", len(doc["weeks"]), "weeks")
+        return 0
     if args.mode == "financials":
         # Daily, not every 5 minutes: the endpoints take minutes and change once a day at most.
         # Period snapshots accumulate in <out>/financials/ (the caller restores earlier ones there).

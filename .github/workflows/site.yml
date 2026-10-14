@@ -112,9 +112,10 @@ jobs:
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # the AI notes live on the data branch too; carry them into the fresh single commit
-          if [ -f _site/data/interpret.json ]; then cp _site/data/interpret.json _hist/; fi
-          if [ -d _site/data/interpret ]; then mkdir -p _hist/interpret && cp -r _site/data/interpret/. _hist/interpret/; fi
+          # the morning job's files (AI notes, 籌碼) live on the data branch too; carry them
+          # into the fresh single commit
+          for f in interpret.json chips.json conferences.json earnings.json dividends.json; do [ -f "_site/data/$f" ] && cp "_site/data/$f" _hist/; done
+          for d in interpret chips earnings; do [ -d "_site/data/$d" ] && mkdir -p "_hist/$d" && cp -r "_site/data/$d/." "_hist/$d/"; done
           cd _hist
           git init -q -b data
           git config user.name  "github-actions[bot]"
@@ -143,6 +144,32 @@ jobs:
       - name: Refresh prices, index, fundamentals and TAIEX
         run: python scripts/build_web_data.py quotes --out _site/data
 
+      # 籌碼: 三大法人 + 融資融券 for the previous trading day (complete by morning), and the
+      # weekly TDCC shareholding distribution. The first run back-fills 60 trading days
+      # (~15 minutes; TWSE rate-limits bursts). Before the AI note so it can use them later.
+      - name: Chips (三大法人, 融資融券, 集保)
+        id: chips
+        if: env.MODE == 'interpret'
+        continue-on-error: true
+        run: python -u scripts/build_web_data.py chips --out _site/data
+
+      # 法說會 from MOPS (HTML query page; no open-data feed). If MOPS refuses the runner,
+      # the previous conferences.json stays.
+      - name: Investor conferences (法說會)
+        id: conferences
+        if: env.MODE == 'interpret'
+        continue-on-error: true
+        run: python -u scripts/build_web_data.py conferences --out _site/data
+
+      # 獲利趨勢 (MOPS quarterly income statements) and 股利 (exchange ex-dividend tables).
+      - name: Earnings and dividends (獲利, 股利)
+        id: earnings
+        if: env.MODE == 'interpret'
+        continue-on-error: true
+        run: |
+          python -u scripts/build_web_data.py earnings --out _site/data
+          python -u scripts/build_web_data.py dividends --out _site/data
+
       # 盤前解讀 (decisions D10-D15). No API key anywhere: the job's GitHub OIDC token is
       # exchanged for a ~10-minute Anthropic token (Workload Identity Federation; the
       # Console rule only trusts this repo's main branch). The script skips weekends,
@@ -162,22 +189,23 @@ jobs:
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.anthropic.com" | jq -r .value > "$ANTHROPIC_IDENTITY_TOKEN_FILE"
           python -u scripts/interpret.py --out _site/data
 
-      - name: Keep the AI note on the data branch
-        if: env.MODE == 'interpret' && steps.interpret.outcome == 'success'
+      - name: Keep the morning files (AI note, 籌碼) on the data branch
+        if: env.MODE == 'interpret' && (steps.interpret.outcome == 'success' || steps.chips.outcome == 'success' || steps.conferences.outcome == 'success' || steps.earnings.outcome == 'success')
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          [ -f _site/data/interpret.json ] || { echo "nothing new"; exit 0; }
           git clone --quiet --depth 1 --branch data --single-branch \
             "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" _push
-          mkdir -p _push/interpret
-          cp _site/data/interpret.json _push/ && cp -r _site/data/interpret/. _push/interpret/
+          for f in interpret.json chips.json conferences.json earnings.json dividends.json; do [ -f "_site/data/$f" ] && cp "_site/data/$f" _push/; done
+          for d in interpret earnings; do [ -d "_site/data/$d" ] && mkdir -p "_push/$d" && cp -r "_site/data/$d/." "_push/$d/"; done
+          # chips/daily is pruned to the newest 90 days, so replace the folder rather than merge
+          [ -d _site/data/chips ] && rm -rf _push/chips && cp -r _site/data/chips _push/chips
           cd _push
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git diff --cached --quiet && { echo "no change"; exit 0; }
-          git commit -q -m "interpret $(date -u +%Y-%m-%d)"
+          git commit -q -m "morning data $(date -u +%Y-%m-%d)"
           git push -q origin data
 
       # Checks the ASSEMBLED site: every script/stylesheet index.html references
