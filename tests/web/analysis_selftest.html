@@ -447,7 +447,9 @@ async function real() {
   const tb = performance.now();
   const I = A.infoFromCloses(cl, ind.items);          // the ONE path from closes to the numbers the rules read
   log.push("infoFromCloses: " + Object.keys(I).length + " symbols in " + Math.round(performance.now() - tb) + "ms");
-  t("real: every symbol in the market list has closes and info", items.every((i) => I[i.c] && I[i.c].n > 0), items.filter((i) => !I[i.c]).length + " missing");
+  // quotes (index.json) refresh every 5 minutes, closes.json once a day: a stock listed today has no closes yet
+  const noInfo = items.filter((i) => !(I[i.c] && I[i.c].n > 0)).map((i) => i.c);
+  t("real: every symbol in the market list has closes and info (bar a few new listings)", noInfo.length <= Math.max(3, items.length * 0.005), noInfo.length + " missing: " + noInfo.slice(0, 10).join());
   t("real: the server no longer publishes MA / RSI / MACD (single implementation)",
     Object.values(ind.items).every((x) => !("ma20" in x) && !("rsi" in x) && !("hist" in x) && !("ma60" in x)));
   t("real: closes.json has one row per symbol, each as long as the date axis", Object.values(cl.items).every((row) => row.length === cl.d.length));

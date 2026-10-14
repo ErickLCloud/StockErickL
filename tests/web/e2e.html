@@ -77,8 +77,9 @@ async function load(url) {
     rows()[0].click();
     await until(() => $("detail").textContent.includes("台積電"));
     t("clicking it shows the company", $("detail").textContent.includes("台積電"));
-    t("shows the same price as quotes.json", $("detail").querySelector(".big").textContent === n2(Q["2330"].last),
-      $("detail").querySelector(".big").textContent + " vs " + n2(Q["2330"].last));
+    const px0 = (Q["2330"].est ? "≈" : "") + n2(Q["2330"].last);      // "≈": no trade yet, best bid/ask stands in
+    t("shows the same price as quotes.json", $("detail").querySelector(".big").textContent === px0,
+      $("detail").querySelector(".big").textContent + " vs " + px0);
     const pe = fund.items["2330"][0];
     t("shows its P/E from fundamental.json", $("detail").textContent.includes(n2(pe)), "pe=" + pe);
     t("labelled as 個股 on 上市", $("detail").textContent.includes("個股") && $("detail").textContent.includes("上市"));
@@ -92,7 +93,7 @@ async function load(url) {
       t("籌碼: one bar per day with data", $("detail").querySelectorAll(".chipbars rect").length === chips.items["2330"].f.filter((v) => v).length);
       t("籌碼: 集保 block when a TDCC week exists", !chips.weeks.length || txt.includes("大戶（400 張以上）持股"));
       t("籌碼: the overlap caveat is shown", txt.includes("大戶和外資有重疊"));
-    } else t("籌碼: no chips.json, detail still renders", !$("detail").textContent.includes("籌碼：載入中"));
+    } else t("籌碼: no chips.json, detail still renders", await until(() => !$("detail").textContent.includes("籌碼：載入中") && $("detail").textContent.includes("台積電")));
     const earn = await fetch("../../docs/data/earnings.json", nc).then((r) => r.ok ? r.json() : null).catch(() => null);
     if (earn && earn.items["2330"]) {
       const tb = [...$("detail").querySelectorAll("table.earn")][0], e = earn.items["2330"];

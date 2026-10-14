@@ -169,12 +169,15 @@ async function until(fn, ms) { const end = Date.now() + (ms || 15000); while (Da
     t("chart lives in its own panel BELOW the detail panel, not inside it", dock && !dock.hidden && !$("detail").contains(dock) &&
       (dock.compareDocumentPosition($("detail")) & w.Node.DOCUMENT_POSITION_PRECEDING) !== 0);
     t("chart is wide: the SVG fills the panel width (>= 600px)", d.getElementById("ch-svg") && d.getElementById("ch-svg").getBoundingClientRect().width >= 600, d.getElementById("ch-svg") && d.getElementById("ch-svg").getBoundingClientRect().width);
+    /* the data branch now has OHLCV: strip it to check the close-only fallback */
+    const hReal = Object.assign({}, Sx.hist[code]); ["o", "h", "l", "v"].forEach((k) => delete hReal[k]);
+    Sx.hist[code] = hReal; CHx.data = null; w.eval("paintTA()");
     t("old data without open/high/low says so and still draws", /還沒有開高低量/.test(dock.textContent) && !!d.getElementById("ch-svg"));
     /* give this symbol real OHLCV (deterministic) and repaint */
-    const h0 = Sx.hist[code], n0 = h0.p.length;
+    const h0 = A.clean(Sx.hist[code], (Sx.ind[code] || {}).gap), n0 = h0.p.length;     // cleaned, so indices match the chart
     const syn = { d: h0.d, p: h0.p, o: h0.p.map((x, i) => +(x * (i % 2 ? 0.99 : 1.01)).toFixed(2)),
       h: h0.p.map((x) => +(x * 1.03).toFixed(2)), l: h0.p.map((x) => +(x * 0.97).toFixed(2)), v: h0.p.map((_, i) => 1000 + i) };
-    Sx.hist[code] = syn; w.eval("paintTA()");
+    Sx.hist[code] = syn; CHx.data = null; w.eval("paintTA()");     // same length + last date would hit the chart cache
     t("with OHLCV there is no 'missing' notice", !/還沒有開高低量/.test(dock.textContent));
     const wrap = d.getElementById("ch-wrap"), svg = () => d.getElementById("ch-svg");
     const xAt = (i) => { const r = svg().getBoundingClientRect(), G = CHx.geo; return r.left + G.xc(i) * (r.width / G.W); };
@@ -231,7 +234,10 @@ async function until(fn, ms) { const end = Date.now() + (ms || 15000); while (Da
     t("weekly: bars are the Monday-based aggregation of the daily bars", CHx.data.bs.length === wk.length && wk.length < syn.d.length / 3, CHx.data.bs.length + " vs " + wk.length);
     const lastW = wk[wk.length - 1];
     CHx.cursor = wk.length - 1; CHx.pinned = false; w.eval("updateCursor()");
-    t("…its last week's high is the max high of that week and its volume the sum", Math.abs(lastW.h - Math.max(...syn.h.slice(-5))) < 0.011 || lastW.h >= Math.max(...syn.h.slice(-3)), lastW.h);
+    const lastDay = new Date(syn.d[syn.d.length - 1] + "T00:00:00Z"), mon = new Date(lastDay - ((lastDay.getUTCDay() + 6) % 7) * 864e5).toISOString().slice(0, 10);
+    const inWk = syn.d.map((x, i) => i).filter((i) => syn.d[i] >= mon);      // the trailing days of the last (maybe partial) week
+    t("…its last week's high is the max high of that week and its volume the sum", Math.abs(lastW.h - Math.max(...inWk.map((i) => syn.h[i]))) < 0.011 &&
+      lastW.v === inWk.reduce((a, i) => a + syn.v[i], 0), lastW.h + " / " + lastW.v + " over " + inWk.length + " days");
     dock.querySelector('[data-ch-tf="D"]').click(); await sleep(80);
     /* keyboard */
     const wrap2 = d.getElementById("ch-wrap"); wrap2.focus(); const cur0 = CHx.cursor;
@@ -377,7 +383,7 @@ async function until(fn, ms) { const end = Date.now() + (ms || 15000); while (Da
     $("tab-home").click(); await sleep(100);
     const cards = [...d.querySelectorAll('.idxcard[data-idx="加權指數"], .idxcard[data-idx="櫃買指數"]')].map((x) => x.textContent.replace(/\s+/g, ""));
     t("home shows the OTC index card right after TAIEX when market.json has it", cards.length === 2 && d.querySelectorAll(".idxcard")[1].dataset.idx === "櫃買指數" && cards[1].includes("櫃買指數") && cards[1].includes("430.46") && cards[1].includes("-0.40") && cards[1].includes("-0.09%") && cards[1].includes("2026-10-07"), cards.join(" | "));
-    Sx.market = mk0; $("tab-home").click();
+    Sx.market = Object.assign({}, mk0); delete Sx.market.otc; $("tab-home").click();
     t("without otc in market.json there is no OTC card (no broken card)", !d.querySelector('.idxcard[data-idx="櫃買指數"]') && !!d.querySelector('.idxcard[data-idx="加權指數"]'));
     t("index cards sit in a responsive grid and never overflow the page sideways", w.getComputedStyle(d.querySelector(".idxcards")).display === "grid" && d.documentElement.scrollWidth <= d.documentElement.clientWidth + 1,
       d.documentElement.scrollWidth + " vs " + d.documentElement.clientWidth);
