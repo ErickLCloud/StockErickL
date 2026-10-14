@@ -107,3 +107,17 @@ def test_build_dividends_filters_etfs_and_survives_one_market(tmp_path):
     assert doc["errors"] == ["tpex: RuntimeError"]
     with pytest.raises(RuntimeError):
         D.build_dividends(tmp_path, today=date(2026, 10, 13), fetch=lambda u: {"stat": "no"})
+
+
+def test_update_retries_a_failed_season_but_not_the_unfiled_newest(tmp_path):
+    tries = {}
+    def fetch(market, y, s):
+        tries[(market, y, s)] = tries.get((market, y, s), 0) + 1
+        if (y, s) == (2025, 3) and tries[(market, y, s)] == 1:
+            raise OSError("busy")
+        if (y, s) == (2026, 3):
+            return "<html></html>"                                       # not filed yet
+        return season(1000, 600, 450, 400, 10.0)
+    done = E.update(tmp_path, date(2026, 10, 13), fetch=fetch, sleep=0)
+    assert "2025Q3" in done and "2026Q3" not in done
+    assert tries[("sii", 2025, 3)] == 2 and tries[("sii", 2026, 3)] == 1

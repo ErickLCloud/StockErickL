@@ -469,7 +469,7 @@ async function real() {
   log.push("second pass dropped " + dropped.length + " of " + top.length + (dropped.length ? ": " + [...new Set(dropped)].slice(0, 3).join(" / ") : ""));
   /* closes.json and the per-symbol history files come from one build and must agree exactly */
   let mism = 0, checked = 0;
-  for (const it of items.slice(0, 60)) {
+  for (const it of items.filter((i) => cl.items[i.c]).slice(0, 60)) {      // a stock listed today has no history yet
     const hf = await j("../../docs/data/history/" + encodeURIComponent(it.c) + ".json");
     const row = cl.items[it.c], d2 = [], p2 = [];
     for (let k = 0; k < row.length; k++) if (row[k] > 0) { d2.push(cl.d[k]); p2.push(row[k]); }

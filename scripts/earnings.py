@@ -107,10 +107,18 @@ def update(store, today, fetch=fetch_season, sleep=2.0):
         merged = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
         got = 0
         for market in MARKETS:
-            try:
-                rows = parse_season(fetch(market, y, s))
-            except Exception:
-                rows = {}
+            # MOPS sometimes answers a burst with an error page: retry, except for the
+            # newest quarter, where an empty answer usually just means not filed yet
+            for attempt in range(1 if (y, s) == (ly, lq) else 3):
+                if attempt and sleep:
+                    time.sleep(sleep * 5 * attempt)
+                try:
+                    rows = parse_season(fetch(market, y, s))
+                except Exception as e:
+                    rows = {}
+                    print(f"earnings: {y}Q{s} {market} attempt {attempt + 1}: {type(e).__name__}", flush=True)
+                if rows:
+                    break
             merged.update(rows)
             got += len(rows)
             if sleep:
