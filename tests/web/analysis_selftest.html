@@ -51,6 +51,19 @@ t("clean without OHLC returns none (not empty arrays)", !("o" in A.clean({ d: ["
   const co = A.withQuote({ d: ["2026-10-13"], p: [101] }, q);
   t("close-only history stays close-only (no half-filled OHLC arrays)", co.p.length === 2 && !("o" in co));
 }
+/* ---- 籌碼參考: the same two conditions as scripts/check_chips.py */
+{
+  const days = ["d1", "d2", "d3", "d4", "d5", "d6"], h = { d: days, p: [1, 1, 1, 1, 1, 1], v: [1000, 1000, 1000, 1000, 1000, 1000] };
+  const s1 = A.chipSignals(days, [-50, 10, 20, 30, 40, 50], [5, -1, 1, 2, 3, 4], h);
+  t("chipSignals: both buying 3+ days in a row and net over 5 days = sync", s1.sync && s1.f5 === 150 && s1.t5 === 9 && !s1.bigSell);
+  t("…a run of only 2 days is not enough", !A.chipSignals(days, [10, 10, 10, 10, 10, 10], [1, 1, 1, -1, 1, 1], h).sync);
+  t("…net 5-day selling is not sync even after 3 buy days", !A.chipSignals(days, [0, -900, -900, 10, 10, 10], [1, 1, 1, 1, 1, 1], h).sync);
+  t("foreign 5-day net sell above 10% of the 5-day volume = bigSell (600 > 500)", A.chipSignals(days, [0, -120, -120, -120, -120, -120], [0, 0, 0, 0, 0, 0], h).bigSell === true);
+  t("…400 of 5,000 is not", A.chipSignals(days, [0, -80, -80, -80, -80, -80], [0, 0, 0, 0, 0, 0], h).bigSell === false);
+  t("…volume missing for a day: unknown, not false", A.chipSignals(days, [0, -120, -120, -120, -120, -120], [0, 0, 0, 0, 0, 0], { d: days.slice(0, 5), p: [1, 1, 1, 1, 1], v: [1, 1, 1, 1, 1] }).bigSell === null);
+  t("liquid needs a 20-day average of 500 lots or more (15+ days of volume)", !A.chipSignals(days, [1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1], h).liquid);
+  t("fewer than 5 days: no reading", A.chipSignals(days.slice(0, 4), [1, 1, 1, 1], [1, 1, 1, 1], h) === null);
+}
 const bx = A.bars({ d: ["a", "b"], p: [10, 12], o: [11, null], h: [9, 11], l: [10.5, 13], v: [100, null] });
 t("bars repairs a day: missing open -> close; high/low widened to contain open and close",
   bx.real && bx.bars[1].o === 12 && bx.bars[0].h === 11 && bx.bars[0].l === 10 && bx.bars[1].h === 12 && bx.bars[1].l === 12 && bx.bars[1].v === null, JSON.stringify(bx.bars));

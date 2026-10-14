@@ -163,6 +163,11 @@ async function until(fn, ms) { const end = Date.now() + (ms || 15000); while (Da
   const verdict = await until(() => d.querySelector(".verdict"));
   t("analysis view paints a verdict", !!verdict, $("detail").textContent.slice(0, 120));
   t("analysis is for the clicked symbol", $("v-code") && $("v-code").value === code, $("v-code") && $("v-code").value + " vs " + code);
+  {
+    const ref = await until(() => d.getElementById("chip-ref") && !/載入中/.test(d.getElementById("chip-ref").textContent) && d.getElementById("chip-ref"));
+    t("the score panel has a 籌碼參考 line that is explicitly not scored (signals with the backtest period, or why it does not apply)", !!ref && /不計分/.test(ref.textContent) && (/2024-10～2026-10/.test(ref.textContent) || /不適用/.test(ref.textContent)), ref && ref.textContent.slice(0, 80));
+    t("…and the score table has no 籌碼 row (display only)", ![...d.querySelectorAll("#steptable td")].some((x) => /籌碼|外資|投信/.test(x.textContent)));
+  }
   /* ---- the big chart below the panels */
   {
     const dock = d.getElementById("chartdock"), Sx = w.eval("S"), CHx = w.eval("CH"), A = w.Analysis;

@@ -1332,6 +1332,7 @@ function paintTA(){
     '<div class="sub">訊號分數：週 ' + sg(an.wScore) + '、日 ' + sg(an.dScore) + '、合計 ' + sg(an.total) + '　<a href="#chartdock">↓ K 線圖與逐步訊號在下方</a></div></div>';
   const below = '<div class="pad" id="ta-below" style="padding-top:0"><div class="sub">逐步訊號（週線定方向，日線定時機）：週 ' + sg(an.wScore) + '、日 ' + sg(an.dScore) + '、合計 ' + sg(an.total) + '</div>' +
     '<div class="scroll"><table id="steptable"><thead><tr><th>週期</th><th class="l">項目</th><th>權重</th><th>分數</th><th class="l">說明</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+    '<div class="note" id="chip-ref"><strong>籌碼參考（不計分）：</strong>' + chipRefHtml(code) + '</div>' +
     '<details class="adv"><summary>評分標準與它的歷史表現</summary><div class="note" id="score-std">' +
     '<strong>權重：</strong>趨勢結構（週線位置、週均線排列、日均線排列、日趨勢線）各 ×2；日線位置、週 RSI、日 RSI 各 ×1；支撐壓力只在「離壓力太近」時扣 1 分（貼近支撐不加分）；' +
     '<strong>兩個 MACD 只顯示、不計分</strong>。' +
@@ -1343,6 +1344,28 @@ function paintTA(){
     '<div class="note">買進需合計 ≥ +' + A.VERDICT_AT + ' 且週線分數不為負；≤ -' + A.VERDICT_AT + ' 為賣出；其餘持有（滿分 +11、最低 -12）。本週若尚未收完，週線以最新收盤暫代。' +
     '支撐壓力為收盤價的轉折群聚，不含盤中高低點。</div>' + DISCLAIMER + '</div>';
   paintDock(an, below);
+}
+
+/* The 籌碼參考 line under the score table. Numbers are from scripts/check_chips.py
+ * (2024-10 .. 2026-10, liquid stocks, 20 trading days after, vs the same day's liquid-stock average). */
+function chipRefHtml(code){
+  if(S.chips === undefined){ loadExtras().then(() => { if(S.view === "ta" && S.sel === code) paintTA(); }); return "載入中…"; }
+  const C = S.chips, it = C && C.items && C.items[code];
+  if(!it) return "這檔沒有三大法人資料。";
+  const s = A.chipSignals(C.days, it.f, it.t, S.hist[code]);
+  if(!s) return "三大法人資料不足 5 天。";
+  const lot = (v) => (v > 0 ? "+" : "") + v.toLocaleString() + " 張";
+  const flows = '（' + s.asOf + '，近 5 日外資 ' + lot(s.f5) + '、投信 ' + lot(s.t5) + '）';
+  // the backtest covered liquid common stocks only; in a thin stock 10% of the volume is a few lots
+  if(code.startsWith("0")) return "ETF 不適用（回測只涵蓋個股）。" + flows;
+  if(!s.liquid) return "不適用：近 20 日均量不到 500 張（或成交量資料不足），回測只涵蓋成交量較大的股票。" + flows;
+  const out = [];
+  out.push(s.sync ? '<b>外資＋投信同步買超</b>（各連買 3 日以上、近 5 日都買超）：回測之後 20 日平均比同期流動股多 1.7%，勝過平均的比率 47%（隨便挑是 40%）。'
+                  : "外資＋投信同步買超：沒有。");
+  out.push(s.bigSell === null ? "外資大量賣超：成交量資料還沒到齊，無法判斷。" :
+           s.bigSell ? '<b>外資 5 日賣超超過成交量 10%</b>：回測之後 20 日平均落後同期流動股 0.5%。' : "外資大量賣超：沒有。");
+  return out.join(" ") + flows +
+    '<br>回測期間 2024-10～2026-10、未扣交易成本（來回約 0.6%）、只有一段多頭行情；外資連買、投信連買或連賣都沒有方向性，所以不列。';
 }
 
 /* ---- 5. sectors and themes: how each group moved over 1 / 5 / 20 / 60 / 120 / 240 trading days.

@@ -170,8 +170,12 @@ def main(argv=None):
     for h in HORIZONS:
         print(f"--- {h} trading days after (enter at next close) ---")
         print(f"{'condition':<26}{'n':>7}{'excess':>9}{'median':>8}{'hit%':>7}{'early':>8}{'late':>8}")
-        for name, s in conds.items():
-            r = evaluate(first_day(np.nan_to_num(s, nan=0).astype(bool) & liquid), P, h, liquid)
+        # every liquid stock-day: excess is 0 by construction, but its median and hit% are what a
+        # signal has to beat (returns are skewed, so the median sits below the mean)
+        rows = [("基準：任一流動股任一天", liquid, False)] + [(k, v, True) for k, v in conds.items()]
+        for name, s, first in rows:
+            sig = np.nan_to_num(s, nan=0).astype(bool) & liquid
+            r = evaluate(first_day(sig) if first else sig, P, h, liquid)
             print(f"{name:<26}{r['n']:>7}{r['excess']:>9.2f}{r['median']:>8.2f}{r['hit']:>7.1f}{r['early']:>8.2f}{r['late']:>8.2f}")
         print()
 

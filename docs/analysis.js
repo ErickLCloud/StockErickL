@@ -99,6 +99,25 @@
     return out;
   }
 
+  /* 籌碼參考: the two conditions that held up in scripts/check_chips.py, for display only (not scored).
+   * days, f, t from chips.json (外資 / 投信 net, 張, null = no data); h = history with v (張).
+   *   sync     外資 and 投信 both bought on each of the last 3+ days and both are net buyers over 5 days
+   *   bigSell  外資 sold more than 10% of the 5-day volume
+   *   liquid   20-day average volume >= 500 張 (the backtest only covered those) */
+  function chipSignals(days, f, t, h) {
+    if (!days || !f || !t || days.length < 5) return null;
+    const sum = (a) => a.reduce((x, y) => x + (y || 0), 0);
+    const run = (a) => { let k = 0; for (let i = a.length - 1; i >= 0 && a[i] > 0; i--) k++; return k; };
+    const f5 = sum(f.slice(-5)), t5 = sum(t.slice(-5));
+    const vol = {};
+    if (h && h.v) h.d.forEach((d, i) => { vol[d] = h.v[i]; });
+    const v5 = days.slice(-5).map((d) => vol[d]), v20 = days.slice(-20).map((d) => vol[d]).filter((x) => x > 0);
+    const vol5 = v5.every((x) => x > 0) ? sum(v5) : null;
+    const avg20 = v20.length >= 15 ? sum(v20) / v20.length : null;
+    return { asOf: days[days.length - 1], f5, t5, vol5, avg20, liquid: avg20 != null && avg20 >= 500,
+             sync: f5 > 0 && t5 > 0 && run(f) >= 3 && run(t) >= 3, bigSell: vol5 != null ? -f5 > 0.10 * vol5 : null };
+  }
+
   /* Candles from a clean() result: one {d,o,h,l,c,v} per day. A day with no
    * open/high/low (or a high/low that does not contain the close) is repaired
    * from the close, and `real` says whether the series had OHLC at all. */
@@ -872,7 +891,7 @@
   const pct = (v) => v == null ? "—" : (v * 100).toFixed(1) + "%";
   const fpf = (v) => v == null ? "—" : v === Infinity ? "∞" : v.toFixed(2);
 
-  root.Analysis = { sma, ema, rsi, macd, vol, clean, withQuote, weekly, pivots, levels, trend, analyze, riskPct,
+  root.Analysis = { sma, ema, rsi, macd, vol, clean, withQuote, chipSignals, weekly, pivots, levels, trend, analyze, riskPct,
     RULES_DEFAULT, normRules, isDefaultRules, SETUP_CHECKS, setupWhy, series, stateAt, snapshot, infoFromCloses,
     setupAt, setupTrades, baselineTrades, setupStats, validateMarket, validationVerdict,
     SCORE_WEIGHTS, VERDICT_AT, SECTOR_PERIODS, sectorGroups, periodReturn, memberReturns, sectorStats, bars, weeklyBars, clampView, zoomView, panView, lastView, barInfo, candidates, inScope, splitTerms, rejection, explain, evaluate, evaluateWhy, backtest, backtestReport, STRATS, COST_RT };
