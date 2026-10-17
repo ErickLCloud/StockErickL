@@ -45,6 +45,7 @@ TPEX_DAY = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes"
 TWSE_PE = "https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL"
 TPEX_PE = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_peratio_analysis"
 TWSE_INDEX = "https://openapi.twse.com.tw/v1/exchangeReport/MI_INDEX"
+TWSE_FMTQIK = "https://www.twse.com.tw/rwd/zh/afterTrading/FMTQIK?response=json"   # this month's sessions, current by the evening
 MIS_URL = ("https://mis.twse.com.tw/stock/api/getStockInfo.jsp"
            "?json=1&delay=0&ex_ch=")
 
@@ -272,10 +273,36 @@ def parse_tpex_index(rows):
             "pct": round(chg / prev * 100, 2) if prev > 0 else None}
 
 
-def build_market(fetch=None):
+def parse_fmtqik(d):
+    """TWSE's monthly market table (one row per session: ROC date, volume, value,
+    trades, TAIEX, change) -> the latest session {date, close, chg, pct}, or None.
+    Unlike the openapi summary, it has the day's close the same evening."""
+    best = None
+    for r in (d or {}).get("data") or []:
+        try:
+            y, m, dd = str(r[0]).split("/")
+            date = f"{int(y) + 1911:04d}-{int(m):02d}-{int(dd):02d}"
+            close, chg = float(str(r[4]).replace(",", "")), float(str(r[5]).replace(",", ""))
+        except (IndexError, ValueError):
+            continue
+        if close > 0 and (best is None or date > best[0]):
+            best = (date, close, chg)
+    if best is None:
+        return None
+    date, close, chg = best
+    prev = close - chg
+    return {"date": date, "close": round(close, 2), "chg": round(chg, 2), "pct": round(chg / prev * 100, 2) if prev > 0 else None}
+
+
+def build_market(fetch=None, mis=None):
     """TAIEX. The exact-name match (the payload also carries the total-return
     index at ~2.3x the level) lives in src.market and is tested there; reuse it
-    rather than keeping a second copy."""
+    rather than keeping a second copy. Both daily tables (TWSE summary, TPEx)
+    only have finished sessions, so during the day they show yesterday's close;
+    `mis` (parse_mis of tse_t00 / otc_o00) gives today's level during and after
+    the session. For TAIEX the openapi summary is a full day behind (still the
+    day before at 21:00), so FMTQIK comes first; MIS wins over either table when
+    its date is at least theirs (before the open it has no trade and is skipped)."""
     from src.market import parse_market_summary
     fetch = fetch or fetch_json
     try:
@@ -286,12 +313,24 @@ def build_market(fetch=None):
         return {"updated": stamp(), "error": "TAIEX row absent"}
     out = {"updated": stamp(), "name": m["name"], "close": m["close"],
            "chg": m["change"], "pct": m["change_pct"]}
+    try:
+        f = parse_fmtqik(fetch(TWSE_FMTQIK))
+        if f:
+            out.update(f)
+    except Exception:
+        pass
+    t = (mis or {}).get("t00") or {}
+    if t.get("last") is not None and t.get("date") and t["date"] >= out.get("date", ""):
+        out.update({"close": t["last"], "chg": t["chg"], "pct": t["pct"], "date": t["date"], "time": t.get("time")})
     try:                                   # the OTC index must never take the TAIEX down with it
         otc = parse_tpex_index(fetch(TPEX_INDEX))
         if otc:
             out["otc"] = otc
     except Exception:
         pass
+    o = (mis or {}).get("o00") or {}
+    if o.get("last") is not None and o.get("date") and o["date"] >= (out.get("otc") or {}).get("date", ""):
+        out["otc"] = {"date": o["date"], "close": o["last"], "chg": o["chg"], "pct": o["pct"], "time": o.get("time")}
     return out
 
 
@@ -525,7 +564,11 @@ def build_quotes(out):
         "updated": stamp(),
         "live_count": sum(1 for q in items.values() if q.get("live")),
         "failed_batches": failed, "items": items})
-    market = build_market()
+    try:
+        idx = parse_mis(fetch_json(MIS_URL + "tse_t00.tw|otc_o00.tw").get("msgArray", []))
+    except Exception:
+        idx = {}
+    market = build_market(mis=idx)
     write_json(out / "market.json", market)
     try:
         events = build_events(out)

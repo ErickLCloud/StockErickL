@@ -458,7 +458,8 @@ function paintHeader(){
           age < 2880 ? Math.round(age / 60) + " 小時前" : Math.round(age / 1440) + " 天前";
   }
   const liveOn = S.liveAt && Date.now() - S.liveAt < 40000;
-  if(liveOn){ $("stamp").textContent = "即時 " + new Date(S.liveAt + 8 * 3600000).toISOString().slice(11, 19) + "（我的持股／自選＋大盤）· 其餘 " + clock + " 快照"; $("dot").className = "dot"; $("stampbox").classList.remove("old"); }
+  if(liveOn && C.liveWindow(Date.now())){ $("stamp").textContent = "即時 " + new Date(S.liveAt + 8 * 3600000).toISOString().slice(11, 19) + "（我的持股／自選＋大盤）· 其餘 " + clock + " 快照"; $("dot").className = "dot"; $("stampbox").classList.remove("old"); }
+  else if(liveOn){ const ix = (S.liveIdx && S.liveIdx.twse) || {}; $("stamp").textContent = "收盤 " + (ix.date || "") + " " + (ix.time || "").slice(0, 5) + "（我的持股／自選＋大盤）· 其餘 " + clock + " 快照"; }
   else $("stamp").textContent = q.updated ? "報價 " + (q.updated.slice(0, 10)) + " " + clock + "（台北）· " + rel : "—";
   const stale = age !== null && age > 30;
   if(!liveOn){
@@ -1611,7 +1612,7 @@ function paintHome(){
     sign(x.chg) + ' (' + sign(x.pct) + '%)</span>' + (sp || "") + (note ? '<span class="flat" style="font-size:11.5px;display:block">' + note + '</span>' : "") + '</div>';
   const glob = ((S.globals && S.globals.items) || []).filter((g) => !g.x).map((g) => idxCard(esc(g.name), g, g.time ? esc(g.time.slice(5)) + "（台北時間）" : "", spark(g.spark, g.chg >= 0))).join("");
   const idx = mk && mk.close != null
-    ? idxCard("加權指數", mk, mk.time ? "即時 " + esc(mk.time) : "") + (mk.otc ? idxCard("櫃買指數", mk.otc, mk.otc.time ? "即時 " + esc(mk.otc.time) : esc(mk.otc.date) + " 盤後") : "") + glob
+    ? idxCard("加權指數", mk, mk.time ? esc((mk.date || C.taipeiToday()).slice(5)) + " " + esc(mk.time.slice(0, 5)) : mk.date ? esc(mk.date) + " 收盤" : "") + (mk.otc ? idxCard("櫃買指數", mk.otc, mk.otc.time ? esc((mk.otc.date || "").slice(5)) + " " + esc(mk.otc.time.slice(0, 5)) : esc(mk.otc.date) + " 盤後") : "") + glob
     : '<div class="empty">指數資料尚未載入。</div>';
 
   const by = {};
@@ -2107,12 +2108,14 @@ function applyLive(){
   for(const [c, q] of Object.entries(S.liveCodes)) S.quotes[c] = Object.assign({}, S.quotes[c], q);
   if(S.liveIdx && (S.liveIdx.twse || S.liveIdx.otc)){
     const base = S.market || {};
-    if(S.liveIdx.twse) S.market = Object.assign({}, base, S.liveIdx.twse);
-    if(S.liveIdx.otc) S.market = Object.assign({}, S.market || base, {otc: Object.assign({}, (S.market || base).otc, S.liveIdx.otc, {date: C.taipeiToday()})});
+    if(S.liveIdx.twse) S.market = Object.assign({}, base, S.liveIdx.twse, {date: S.liveIdx.twse.date || C.taipeiToday()});
+    if(S.liveIdx.otc) S.market = Object.assign({}, S.market || base, {otc: Object.assign({}, (S.market || base).otc, S.liveIdx.otc, {date: S.liveIdx.otc.date || C.taipeiToday()})});
   }
 }
-async function pollLive(){
-  if(!window.LIVE_URL || NOLIVE || document.hidden || !C.liveWindow(Date.now())) return;
+/* Every 10 s during the session; outside it, once when the page opens or comes back into view,
+ * so after the close the board shows the final prices instead of the last (pre-close) snapshot. */
+async function pollLive(once){
+  if(!window.LIVE_URL || NOLIVE || document.hidden || !(once === true || C.liveWindow(Date.now()))) return;
   try{
     const ch = C.liveChannels(ownCodes(), S.byCode);
     const r = await fetch(window.LIVE_URL + "?ex_ch=" + encodeURIComponent(ch.join("|")), {cache: "no-store"});
@@ -2132,8 +2135,9 @@ async function pollLive(){
   }catch(e){ S.liveAt = null; }     /* fall back silently to the snapshot */
 }
 
-boot().then(pollLive);
+boot().then(() => pollLive(true));
 setInterval(pollLive, 10000);
+document.addEventListener("visibilitychange", () => { if(!document.hidden && !C.liveWindow(Date.now())) pollLive(true); });
 setInterval(refresh, 60000);        /* a new deployment lands every ~5 min; poll faster to pick it up */
 setInterval(paintHeader, 30000);    /* keep "N 分鐘前" honest between polls */
 </script>

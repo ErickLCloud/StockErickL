@@ -433,6 +433,44 @@ def test_the_otc_index_is_optional_in_market_json(monkeypatch):
     assert ok["otc"]["close"] == 430.46 and ok["close"] == 20000.0
 
 
+def test_the_otc_index_takes_todays_mis_level_over_the_finished_sessions_table(monkeypatch):
+    import src.market
+    monkeypatch.setattr(src.market, "parse_market_summary", lambda rows: {"name": "TAIEX", "close": 20000.0, "change": 10.0, "change_pct": 0.05})
+    tpex = lambda url: [{"Date": "20261014", "Close": "420.13", "Change": "5.82"}] if url == bw.TPEX_INDEX else []
+    mis = bw.parse_mis([{"c": "o00", "z": "425.00", "y": "420.13", "t": "13:30:00", "d": "20261015"}])
+    m = bw.build_market(fetch=tpex, mis=mis)
+    assert m["otc"] == {"date": "2026-10-15", "close": 425.0, "chg": 4.87, "pct": 1.16, "time": "13:30:00"}
+    old = bw.parse_mis([{"c": "o00", "z": "419.00", "y": "418.00", "d": "20261013"}])
+    assert bw.build_market(fetch=tpex, mis=old)["otc"]["date"] == "2026-10-14"      # an older MIS reply never wins
+    assert bw.build_market(fetch=tpex, mis={})["otc"]["close"] == 420.13             # MIS down: the table as before
+
+
+def test_taiex_takes_todays_mis_level_because_the_summary_table_is_yesterdays(monkeypatch):
+    import src.market
+    monkeypatch.setattr(src.market, "parse_market_summary", lambda rows: {"name": "發行量加權股價指數", "close": 48625.83, "change": 284.52, "change_pct": 0.59})
+    mis = bw.parse_mis([{"c": "t00", "z": "46969.87", "y": "48625.83", "t": "13:33:00", "d": "20261015"}])
+    m = bw.build_market(fetch=lambda url: [], mis=mis)
+    assert (m["close"], m["chg"], m["pct"], m["date"], m["time"]) == (46969.87, -1655.96, -3.41, "2026-10-15", "13:33:00")
+    assert m["name"] == "發行量加權股價指數"
+    assert bw.build_market(fetch=lambda url: [], mis={})["close"] == 48625.83        # MIS down: the table as before
+
+
+FMTQIK = {"stat": "OK", "data": [["115/10/14", "1", "1", "1", "48,625.83", "284.52"], ["115/10/15", "1", "1", "1", "46,969.87", "-1,655.96"]]}
+
+
+def test_taiex_before_the_open_is_fmtqiks_last_session_not_the_openapi_summarys_day_before(monkeypatch):
+    import src.market
+    monkeypatch.setattr(src.market, "parse_market_summary", lambda rows: {"name": "發行量加權股價指數", "close": 48625.83, "change": 284.52, "change_pct": 0.59})
+    assert bw.parse_fmtqik(FMTQIK) == {"date": "2026-10-15", "close": 46969.87, "chg": -1655.96, "pct": -3.41}
+    pre_open = bw.parse_mis([{"c": "t00", "z": "-", "y": "46969.87", "t": "07:50:00", "d": "20261016"}])   # no trade yet
+    m = bw.build_market(fetch=lambda url: FMTQIK if url == bw.TWSE_FMTQIK else [], mis=pre_open)
+    assert (m["close"], m["chg"], m["date"]) == (46969.87, -1655.96, "2026-10-15")
+    live = bw.parse_mis([{"c": "t00", "z": "47100.00", "y": "46969.87", "t": "09:05:00", "d": "20261016"}])
+    assert bw.build_market(fetch=lambda url: FMTQIK if url == bw.TWSE_FMTQIK else [], mis=live)["date"] == "2026-10-16"
+    for bad in (None, {}, {"data": [["x"]]}, {"data": [["115/10/15", "1", "1", "1", "-", "-"]]}):
+        assert bw.parse_fmtqik(bad) is None
+
+
 # ------------------------------------------------------------------ events
 
 def test_roc_to_iso():

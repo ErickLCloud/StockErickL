@@ -147,18 +147,19 @@
       if (!m.c || last === null) continue;
       const chg = prev ? Math.round((last - prev) * 100) / 100 : null;
       const pct = prev ? Math.round((last / prev - 1) * 10000) / 100 : null;
-      if (m.c === "t00") out.twse = { close: last, chg, pct, time: m.t || null, at: f(m.tlong) };
-      else if (m.c === "o00") out.otc = { close: last, chg, pct, time: m.t || null, at: f(m.tlong) };
-      else out.codes[m.c] = { live: true, est, last, prev, chg, pct, open: f(m.o), high: f(m.h), low: f(m.l), vol: f(m.v), time: m.t || null, at: f(m.tlong),
-                              date: /^\d{8}$/.test(m.d || "") ? m.d.slice(0, 4) + "-" + m.d.slice(4, 6) + "-" + m.d.slice(6) : null };
+      const date = /^\d{8}$/.test(m.d || "") ? m.d.slice(0, 4) + "-" + m.d.slice(4, 6) + "-" + m.d.slice(6) : null;
+      if (m.c === "t00") out.twse = { close: last, chg, pct, time: m.t || null, at: f(m.tlong), date };
+      else if (m.c === "o00") out.otc = { close: last, chg, pct, time: m.t || null, at: f(m.tlong), date };
+      else out.codes[m.c] = { live: true, est, last, prev, chg, pct, open: f(m.o), high: f(m.h), low: f(m.l), vol: f(m.v), time: m.t || null, at: f(m.tlong), date };
     }
     return out;
   }
 
-  /* Taiwan cash session plus a few minutes either side: Mon-Fri 08:55-13:35 Taipei. */
+  /* Taiwan cash session plus a few minutes either side: Mon-Fri 08:55-13:45 Taipei
+   * (the closing auction ends 13:30 and the final index prints a few minutes later). */
   function liveWindow(nowMs) {
     const t = new Date(nowMs + 8 * 3600000), dow = t.getUTCDay(), mins = t.getUTCHours() * 60 + t.getUTCMinutes();
-    return dow >= 1 && dow <= 5 && mins >= 8 * 60 + 55 && mins <= 13 * 60 + 35;
+    return dow >= 1 && dow <= 5 && mins >= 8 * 60 + 55 && mins <= 13 * 60 + 45;
   }
 
   function ageMinutes(iso, nowMs) {

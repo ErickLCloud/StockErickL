@@ -43,6 +43,11 @@ t("parseLive: a real trade is not est", lv.codes["2330"].est === false);
 t("parseLive survives nothing", C.parseLive(null).twse === null);
 t("liveWindow open Wed 10:00 Taipei", C.liveWindow(Date.parse("2026-10-14T02:00:00Z")));
 t("liveWindow closed Wed 14:00 Taipei", !C.liveWindow(Date.parse("2026-10-14T06:00:00Z")));
+t("liveWindow still open Wed 13:40 Taipei (final index prints after 13:30)", C.liveWindow(Date.parse("2026-10-14T05:40:00Z")));
+{
+  const p = C.parseLive([{ c: "o00", z: "425.00", y: "420.13", t: "13:33:00", d: "20261015", tlong: "1" }]);
+  t("parseLive keeps the trade date on an index (the after-close fetch must not stamp today on Friday's close)", p.otc && p.otc.date === "2026-10-15" && p.otc.close === 425);
+}
 t("liveWindow closed Sat 10:00 Taipei", !C.liveWindow(Date.parse("2026-10-17T02:00:00Z")));
 
 /* ---- holdings maths: same numbers as the Python hand-check */
