@@ -13,6 +13,8 @@ permissions:
 
 jobs:
   test:
+    # Public repo only: the data-branch clone below is anonymous, which a private repo refuses.
+    if: github.repository == 'ErickLCloud/StockErickL'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

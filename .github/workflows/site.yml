@@ -46,6 +46,9 @@ concurrency:
 
 jobs:
   build:
+    # Only the public repo deploys. The private repo carries this file too, but it
+    # has no Pages and its data-branch clone needs credentials, so it would fail.
+    if: github.repository == 'ErickLCloud/StockErickL'
     runs-on: ubuntu-latest
     timeout-minutes: 50
     permissions:
